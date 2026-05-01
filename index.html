@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GTI Report Generator</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="dashboard-shell">
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">SOC / Threat Intelligence</p>
+                <h1>GTI Report Generator</h1>
+                <p class="subtitle">
+                    Generate a fast analyst-style report from the GTI backend MVP.
+                </p>
+            </div>
+            <div class="topbar-badges" aria-label="Status badges">
+                <span class="badge badge-live">MVP</span>
+                <span class="badge">FastAPI</span>
+                <span class="badge">Markdown Output</span>
+            </div>
+        </header>
+
+        <main class="dashboard-grid">
+            <section class="panel panel-form" aria-labelledby="form-title">
+                <div class="panel-heading">
+                    <p class="panel-kicker">Input Console</p>
+                    <h2 id="form-title">Report Parameters</h2>
+                </div>
+
+                <form id="report-form" class="report-form">
+                    <label class="field">
+                        <span>GTI API Key</span>
+                        <input
+                            id="api_key"
+                            name="api_key"
+                            type="password"
+                            placeholder="Enter your GTI API key"
+                            required
+                        >
+                    </label>
+
+                    <label class="field">
+                        <span>Report Type</span>
+                        <select id="report_type" name="report_type" required>
+                            <option value="Threat Landscape">Threat Landscape</option>
+                            <option value="IoC Enrichment">IoC Enrichment</option>
+                            <option value="Company Exposure">Company Exposure</option>
+                        </select>
+                    </label>
+
+                    <div class="field-row">
+                        <label class="field">
+                            <span>Year</span>
+                            <input
+                                id="year"
+                                name="year"
+                                type="number"
+                                value="2025"
+                                min="2000"
+                                max="2100"
+                                required
+                            >
+                        </label>
+
+                        <label class="field">
+                            <span>Target (Optional)</span>
+                            <input
+                                id="target"
+                                name="target"
+                                type="text"
+                                placeholder="Company, region, or industry"
+                            >
+                        </label>
+                    </div>
+
+                    <button id="generate-button" type="submit" class="generate-button">
+                        Generate Report
+                    </button>
+                </form>
+            </section>
+
+            <section class="panel panel-results" aria-labelledby="results-title">
+                <div class="panel-heading">
+                    <p class="panel-kicker">Output Feed</p>
+                    <div class="results-header">
+                        <h2 id="results-title">Generated Report</h2>
+                        <span id="status-pill" class="status-pill idle">Idle</span>
+                    </div>
+                </div>
+
+                <div id="message-banner" class="message-banner" hidden></div>
+
+                <article id="report-output" class="report-output empty-state">
+                    <h3>No report generated yet</h3>
+                    <p>
+                        Fill in the form, call the backend, and the rendered Markdown report
+                        will appear here.
+                    </p>
+                </article>
+
+                <details id="raw-json-details" class="raw-json-panel">
+                    <summary>Raw JSON Response</summary>
+                    <pre id="raw-json-output">No response yet.</pre>
+                </details>
+            </section>
+        </main>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>
