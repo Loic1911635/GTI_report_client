@@ -132,4 +132,105 @@ def generate_markdown_report(
         lines.append("## Notes")
         lines.append(notes)
 
+    return "\n".join
+
+
+def generate_ioc_enrichment_markdown_report(enrichment_data: dict[str, Any]) -> str:
+    """Build a Markdown report for a VirusTotal domain enrichment lookup."""
+
+    target = str(enrichment_data.get("indicator", "unknown"))
+    source = str(enrichment_data.get("source", "gti_virustotal_v3"))
+    indicator_type = str(enrichment_data.get("indicator_type", "domain"))
+    reputation = int(enrichment_data.get("reputation", 0))
+    malicious = int(enrichment_data.get("malicious", 0))
+    suspicious = int(enrichment_data.get("suspicious", 0))
+    harmless = int(enrichment_data.get("harmless", 0))
+    undetected = int(enrichment_data.get("undetected", 0))
+    categories = enrichment_data.get("categories", {})
+
+    lines: list[str] = []
+    lines.append("# GTI Report: IoC Enrichment")
+    lines.append("")
+    lines.append(f"**Target:** {target}")
+    lines.append(f"**Source:** {source}")
+    lines.append(f"**Indicator Type:** {indicator_type}")
+    lines.append(f"**Reputation:** {reputation}")
+    lines.append("")
+    lines.append("## Detection Overview")
+    lines.append(f"- Malicious: {malicious}")
+    lines.append(f"- Suspicious: {suspicious}")
+    lines.append(f"- Harmless: {harmless}")
+    lines.append(f"- Undetected: {undetected}")
+    lines.append("")
+    lines.append("## Categories")
+
+    if isinstance(categories, dict) and categories:
+        for vendor, category in categories.items():
+            lines.append(f"- **{vendor}**: {category}")
+    else:
+        lines.append("- No categories were returned by the data source.")
+
+    lines.append("")
+    lines.append("## Analyst Summary")
+    lines.append(
+        _build_ioc_analyst_summary(
+            target=target,
+            reputation=reputation,
+            malicious=malicious,
+            suspicious=suspicious,
+            harmless=harmless,
+            undetected=undetected,
+            categories=categories,
+        )
+    )
+
     return "\n".join(lines)
+
+
+def _build_ioc_analyst_summary(
+    target: str,
+    reputation: int,
+    malicious: int,
+    suspicious: int,
+    harmless: int,
+    undetected: int,
+    categories: Any,
+) -> str:
+    """Create a short analyst-style summary from enrichment signals."""
+
+    if malicious > 0 or suspicious > 0:
+        verdict_summary = (
+            f"`{target}` shows elevated risk with {malicious} malicious verdict(s) "
+            f"and {suspicious} suspicious verdict(s) in the latest VirusTotal snapshot."
+        )
+    elif reputation < 0:
+        verdict_summary = (
+            f"`{target}` has a negative reputation score of {reputation} even though "
+            "the current snapshot does not show malicious or suspicious counts."
+        )
+    elif harmless > 0 and malicious == 0 and suspicious == 0:
+        verdict_summary = (
+            f"`{target}` currently appears lower risk in this snapshot, with "
+            f"{harmless} harmless verdict(s) and no malicious or suspicious detections."
+        )
+    else:
+        verdict_summary = (
+            f"`{target}` returned limited telemetry, including {undetected} undetected "
+            "verdict(s), so it should be correlated with surrounding context."
+        )
+
+    if isinstance(categories, dict) and categories:
+        category_summary = ", ".join(
+            f"{vendor}: {category}" for vendor, category in categories.items()
+        )
+        return (
+            f"{verdict_summary} Reported categories include {category_summary}. "
+            "Use the enrichment result alongside DNS, WHOIS, and internal detections "
+            "before making a trust decision."
+        )
+
+    return (
+        f"{verdict_summary} No category labels were returned by the API. Use the "
+        "enrichment result alongside DNS, WHOIS, and internal detections before "
+        "making a trust decision."
+    )

@@ -7,6 +7,9 @@ const reportOutput = document.getElementById("report-output");
 const rawJsonOutput = document.getElementById("raw-json-output");
 const messageBanner = document.getElementById("message-banner");
 const statusPill = document.getElementById("status-pill");
+const reportTypeField = document.getElementById("report_type");
+const targetField = document.getElementById("target");
+const targetLabel = document.getElementById("target-label");
 
 function escapeHtml(text) {
     return text
@@ -102,8 +105,21 @@ function setLoadingState(isLoading) {
     updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
 }
 
+function syncTargetRequirement() {
+    const isIocEnrichment = reportTypeField.value === "IoC Enrichment";
+
+    targetField.required = isIocEnrichment;
+    targetField.placeholder = isIocEnrichment ? "example.com" : "Company, region, or industry";
+    targetLabel.textContent = isIocEnrichment ? "Target Domain" : "Target (Optional)";
+}
+
 async function generateReport(event) {
     event.preventDefault();
+
+    if (!reportForm.reportValidity()) {
+        return;
+    }
+
     clearMessage();
     setLoadingState(true);
 
@@ -155,4 +171,6 @@ async function generateReport(event) {
     }
 }
 
+reportTypeField.addEventListener("change", syncTargetRequirement);
 reportForm.addEventListener("submit", generateReport);
+syncTargetRequirement();

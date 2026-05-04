@@ -9,8 +9,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from backend.gti_client import MockGTIClient
-from backend.report_generator import generate_markdown_report, normalize_threat_landscape
+from backend.gti_client import GTIClientError, MockGTIClient, lookup_domain
+from backend.report_generator import (
+    generate_ioc_enrichment_markdown_report,
+    generate_markdown_report,
+    normalize_threat_landscape,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -29,7 +33,7 @@ app = FastAPI(
 class GenerateReportRequest(BaseModel):
     """Input payload for the report generation endpoint."""
 
-    api_key: str = Field(..., description="API key placeholder for the future GTI client.")
+    api_key: str = Field(..., description="GTI or VirusTotal API key.")
     report_type: str = Field(..., description="Type of report to generate.")
     year: int = Field(..., description="Year used to scope the report.")
     target: str | None = Field(
@@ -69,35 +73,44 @@ def serve_style_css() -> FileResponse:
 
 @app.post("/generate-report", response_model=GenerateReportResponse)
 def generate_report(request: GenerateReportRequest) -> GenerateReportResponse:
-    """Generate a Markdown GTI report from mock threat landscape data."""
+    """Generate a Markdown report from GTI/VirusTotal or the mock fallback."""
+
+    normalized_target = request.target.strip() if request.target else None
 
     try:
-        # Step 1: Pull mock raw data from the fake GTI client.
-        client = MockGTIClient(api_key=request.api_key)
-        raw_data = client.fetch_threat_landscape(
-            report_type=request.report_type,
-            year=request.year,
-            target=request.target,
-        )
+        if request.report_type == "IoC Enrichment" and normalized_target:
+            raw_data = lookup_domain(
+                api_key=request.api_key,
+                domain=normalized_target,
+            )
+            report_markdown = generate_ioc_enrichment_markdown_report(raw_data)
+        else:
+            # We keep the original mock flow as a fallback for non-IoC reports
+            # and for any legacy requests that do not provide a target.
+            client = MockGTIClient(api_key=request.api_key)
+            raw_data = client.fetch_threat_landscape(
+                report_type=request.report_type,
+                year=request.year,
+                target=normalized_target,
+            )
 
-        # Step 2: Normalize the data so the report generator can rely on a
-        # stable structure even if the future API changes slightly.
-        normalized_data = normalize_threat_landscape(raw_data)
-
-        # Step 3: Build the Markdown report that the frontend can display,
-        # store, or export later.
-        report_markdown = generate_markdown_report(
-            normalized_data=normalized_data,
-            report_type=request.report_type,
-            year=request.year,
-            target=request.target,
-        )
+            normalized_data = normalize_threat_landscape(raw_data)
+            report_markdown = generate_markdown_report(
+                normalized_data=normalized_data,
+                report_type=request.report_type,
+                year=request.year,
+                target=normalized_target,
+            )
 
         return GenerateReportResponse(
             status="success",
             report_markdown=report_markdown,
             raw_data=raw_data,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GTIClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         # This broad exception is acceptable for an MVP because it keeps the
         # endpoint behavior simple while still surfacing useful debug details.
