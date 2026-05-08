@@ -161,6 +161,12 @@ body::before {
     gap: 18px;
 }
 
+.form-actions,
+.result-actions {
+    display: grid;
+    gap: 12px;
+}
+
 .field {
     display: grid;
     gap: 8px;
@@ -178,14 +184,80 @@ body::before {
     color: var(--text-main);
 }
 
-input,
+.config-group {
+    margin: 0;
+    padding: 16px;
+    border: 1px solid rgba(16, 35, 45, 0.08);
+    border-radius: var(--radius-md);
+    background: rgba(248, 252, 252, 0.82);
+}
+
+.config-group legend {
+    padding: 0 10px;
+    font-size: 0.92rem;
+    font-weight: 800;
+    color: var(--accent-strong);
+}
+
+.option-grid,
+.format-options {
+    display: grid;
+    gap: 12px;
+}
+
+.option-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.option-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid rgba(16, 35, 45, 0.1);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.9);
+    cursor: pointer;
+}
+
+.option-card input {
+    width: 18px;
+    height: 18px;
+    margin: 2px 0 0;
+    accent-color: var(--accent);
+}
+
+.option-copy {
+    display: grid;
+    gap: 4px;
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.option-meta {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-soft);
+}
+
+.option-card-disabled {
+    cursor: not-allowed;
+    opacity: 0.68;
+}
+
+input[type="password"],
+input[type="text"],
+input[type="number"],
 select,
 button,
 summary {
     font: inherit;
 }
 
-input,
+input[type="password"],
+input[type="text"],
+input[type="number"],
 select {
     width: 100%;
     padding: 14px 16px;
@@ -196,7 +268,9 @@ select {
     transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
-input:focus,
+input[type="password"]:focus,
+input[type="text"]:focus,
+input[type="number"]:focus,
 select:focus {
     outline: none;
     border-color: rgba(13, 127, 122, 0.62);
@@ -225,6 +299,25 @@ select:focus {
 .generate-button:disabled {
     cursor: progress;
     opacity: 0.78;
+}
+
+.secondary-button {
+    border: 1px solid rgba(13, 127, 122, 0.16);
+    color: var(--accent-strong);
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: none;
+}
+
+.secondary-button:hover:not(:disabled) {
+    box-shadow: 0 12px 24px rgba(9, 95, 99, 0.12);
+}
+
+#explorer-actions .secondary-button {
+    width: 100%;
+}
+
+#company-dtm-actions .secondary-button {
+    width: 100%;
 }
 
 .message-banner {
@@ -311,6 +404,21 @@ select:focus {
     padding-left: 22px;
 }
 
+.report-output details {
+    margin-top: 10px;
+    border: 1px solid rgba(16, 35, 45, 0.08);
+    border-radius: var(--radius-sm);
+    background: rgba(246, 250, 250, 0.92);
+    overflow: hidden;
+}
+
+.report-output summary {
+    padding: 12px 14px;
+    cursor: pointer;
+    font-weight: 700;
+    color: var(--accent-strong);
+}
+
 .report-output code,
 #raw-json-output {
     font-family: "Consolas", "Courier New", monospace;
@@ -321,6 +429,21 @@ select:focus {
     border-radius: 999px;
     background: rgba(13, 127, 122, 0.1);
     color: var(--accent-strong);
+}
+
+.report-output pre {
+    overflow-x: auto;
+    padding: 16px;
+    border-radius: var(--radius-md);
+    background: #10232d;
+    color: #f4fffd;
+}
+
+.report-output pre code {
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
 }
 
 .raw-json-panel {
@@ -375,6 +498,10 @@ select:focus {
 
     .field-row,
     .field-row {
+        grid-template-columns: 1fr;
+    }
+
+    .option-grid {
         grid-template-columns: 1fr;
     }
 

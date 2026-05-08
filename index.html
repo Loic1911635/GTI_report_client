@@ -45,13 +45,55 @@
                     <label class="field">
                         <span>Report Type</span>
                         <select id="report_type" name="report_type" required>
-                            <option value="Threat Landscape">Threat Landscape</option>
                             <option value="IoC Enrichment">IoC Enrichment</option>
-                            <option value="Company Exposure">Company Exposure</option>
+                            <option value="Industry Snapshot Explorer">Industry Snapshot Explorer</option>
+                            <option value="Company Exposure / DTM">Company Exposure / DTM</option>
                         </select>
                     </label>
 
-                    <div class="field-row">
+                    <div id="company-dtm-fields" class="report-form" hidden>
+                        <label class="field">
+                            <span>Company Name</span>
+                            <input
+                                id="company_name"
+                                name="company_name"
+                                type="text"
+                                placeholder="Example: Contoso"
+                            >
+                        </label>
+
+                        <label class="field">
+                            <span>Primary Domain</span>
+                            <input
+                                id="primary_domain"
+                                name="primary_domain"
+                                type="text"
+                                placeholder="example.com"
+                            >
+                        </label>
+
+                        <label class="field">
+                            <span>Keywords</span>
+                            <input
+                                id="keywords"
+                                name="keywords"
+                                type="text"
+                                placeholder="Brand names, executives, products, comma-separated"
+                            >
+                        </label>
+
+                        <label class="field">
+                            <span>Monitor ID (Optional)</span>
+                            <input
+                                id="monitor_id"
+                                name="monitor_id"
+                                type="text"
+                                placeholder="Filter DTM alerts to one specific monitor"
+                            >
+                        </label>
+                    </div>
+
+                    <div id="report-scope-fields" class="field-row">
                         <label class="field">
                             <span>Year</span>
                             <input
@@ -76,9 +118,97 @@
                         </label>
                     </div>
 
-                    <button id="generate-button" type="submit" class="generate-button">
-                        Generate Report
-                    </button>
+                    <fieldset id="report-sections-group" class="config-group">
+                        <legend>Report Sections</legend>
+                        <div class="option-grid" aria-label="Report sections">
+                            <label class="option-card">
+                                <input type="checkbox" name="sections" value="Executive Summary" checked>
+                                <span class="option-copy">Executive Summary</span>
+                            </label>
+                            <label class="option-card">
+                                <input type="checkbox" name="sections" value="Technical Details" checked>
+                                <span class="option-copy">Technical Details</span>
+                            </label>
+                            <label class="option-card">
+                                <input type="checkbox" name="sections" value="IoCs" checked>
+                                <span class="option-copy">IoCs</span>
+                            </label>
+                            <label class="option-card">
+                                <input type="checkbox" name="sections" value="Threat Actors" checked>
+                                <span class="option-copy">Threat Actors</span>
+                            </label>
+                            <label class="option-card">
+                                <input type="checkbox" name="sections" value="Industries Impacted" checked>
+                                <span class="option-copy">Industries Impacted</span>
+                            </label>
+                            <label class="option-card">
+                                <input type="checkbox" name="sections" value="Affected Companies" checked>
+                                <span class="option-copy">Affected Companies</span>
+                            </label>
+                            <label class="option-card">
+                                <input type="checkbox" name="sections" value="Recommended SOC Actions" checked>
+                                <span class="option-copy">Recommended SOC Actions</span>
+                            </label>
+                            <label class="option-card">
+                                <input type="checkbox" name="sections" value="Raw GTI Data">
+                                <span class="option-copy">Raw GTI Data</span>
+                            </label>
+                        </div>
+                    </fieldset>
+
+                    <fieldset id="output-format-group" class="config-group">
+                        <legend>Output Format</legend>
+                        <div class="format-options" aria-label="Output format">
+                            <label class="option-card">
+                                <input type="radio" name="output_format" value="markdown" checked>
+                                <span class="option-copy">Markdown</span>
+                            </label>
+                            <label class="option-card">
+                                <input type="radio" name="output_format" value="html">
+                                <span class="option-copy">HTML</span>
+                            </label>
+                            <label class="option-card option-card-disabled">
+                                <input type="radio" name="output_format" value="docx" disabled>
+                                <span class="option-copy">
+                                    DOCX
+                                    <span class="option-meta">Coming later</span>
+                                </span>
+                            </label>
+                        </div>
+                    </fieldset>
+
+                    <div id="report-actions" class="form-actions">
+                        <button id="generate-button" type="submit" class="generate-button">
+                            Generate Report
+                        </button>
+                    </div>
+
+                    <div id="explorer-actions" class="form-actions" hidden>
+                        <button
+                            id="explorer-button"
+                            type="button"
+                            class="generate-button secondary-button"
+                        >
+                            Run Explorer
+                        </button>
+                    </div>
+
+                    <div id="company-dtm-actions" class="form-actions" hidden>
+                        <button
+                            id="dtm-monitors-button"
+                            type="button"
+                            class="generate-button secondary-button"
+                        >
+                            Test DTM Monitors
+                        </button>
+                        <button
+                            id="dtm-alerts-button"
+                            type="button"
+                            class="generate-button secondary-button"
+                        >
+                            Test DTM Alerts
+                        </button>
+                    </div>
                 </form>
             </section>
 
@@ -100,6 +230,18 @@
                         will appear here.
                     </p>
                 </article>
+
+                <div class="result-actions">
+                    <button
+                        id="download-button"
+                        type="button"
+                        class="generate-button secondary-button"
+                        hidden
+                        disabled
+                    >
+                        Download Report
+                    </button>
+                </div>
 
                 <details id="raw-json-details" class="raw-json-panel">
                     <summary>Raw JSON Response</summary>

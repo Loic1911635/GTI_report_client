@@ -1,17 +1,93 @@
-"""Helpers for normalizing GTI data and building Markdown reports."""
+"""Helpers for normalizing GTI data and building configurable reports."""
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 
-def normalize_threat_landscape(raw_data: dict[str, Any]) -> dict[str, Any]:
-    """Normalize the raw data into a stable structure for report generation.
+SUPPORTED_REPORT_SECTIONS = (
+    "Executive Summary",
+    "Technical Details",
+    "IoCs",
+    "Threat Actors",
+    "Industries Impacted",
+    "Affected Companies",
+    "Recommended SOC Actions",
+    "Raw GTI Data",
+)
 
-    Even though the mock client already returns clean data, this function is
-    useful because a real API may later return missing keys, extra fields, or
-    inconsistent value types.
-    """
+DEFAULT_REPORT_SECTIONS = tuple(
+    section for section in SUPPORTED_REPORT_SECTIONS if section != "Raw GTI Data"
+)
+
+SUPPORTED_OUTPUT_FORMATS = {
+    "markdown": ".md",
+    "html": ".html",
+}
+
+
+def normalize_requested_sections(sections: list[str] | None) -> list[str]:
+    """Return supported report sections in a predictable order."""
+
+    requested_sections = sections or list(DEFAULT_REPORT_SECTIONS)
+    normalized_sections: list[str] = []
+    seen_sections: set[str] = set()
+
+    for section in requested_sections:
+        normalized_section = str(section).strip()
+        if (
+            normalized_section in SUPPORTED_REPORT_SECTIONS
+            and normalized_section not in seen_sections
+        ):
+            normalized_sections.append(normalized_section)
+            seen_sections.add(normalized_section)
+
+    if not normalized_sections:
+        raise ValueError("Select at least one supported report section.")
+
+    return normalized_sections
+
+
+def normalize_output_format(output_format: str | None) -> str:
+    """Validate the requested output format."""
+
+    normalized_output_format = str(output_format or "markdown").strip().lower()
+
+    if normalized_output_format == "docx":
+        raise ValueError("DOCX output is not available yet.")
+
+    if normalized_output_format not in SUPPORTED_OUTPUT_FORMATS:
+        supported_formats = ", ".join(sorted(SUPPORTED_OUTPUT_FORMATS))
+        raise ValueError(
+            f"Unsupported output format '{normalized_output_format}'. "
+            f"Use one of: {supported_formats}."
+        )
+
+    return normalized_output_format
+
+
+def build_downloadable_filename(
+    report_type: str,
+    year: int,
+    output_format: str,
+    target: str | None = None,
+) -> str:
+    """Build a safe downloadable filename for the generated report."""
+
+    scope = target or str(year)
+    slug_source = f"{report_type}-{scope}-{year}".lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug_source).strip("-")
+
+    if not slug:
+        slug = "gti-report"
+
+    return f"{slug}{SUPPORTED_OUTPUT_FORMATS[output_format]}"
+
+
+def normalize_threat_landscape(raw_data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize the raw data into a stable structure for report generation."""
 
     metadata = raw_data.get("metadata", {})
 
@@ -64,79 +140,112 @@ def generate_markdown_report(
     normalized_data: dict[str, Any],
     report_type: str,
     year: int,
+    sections: list[str],
+    raw_data: dict[str, Any],
     target: str | None = None,
 ) -> str:
-    """Build a simple Markdown report from normalized threat data."""
+    """Build a configurable Markdown report from normalized threat data."""
 
-    # We use list accumulation because it is easier to read and maintain than
-    # one very large multi-line f-string for longer student projects.
     lines: list[str] = []
     report_target = target or "Global threat landscape"
 
-    lines.append(f"# GTI Report: {report_type.title()} ({year})")
+    lines.append(f"# GTI Report: {report_type} ({year})")
     lines.append("")
     lines.append(f"**Target:** {report_target}")
     lines.append(f"**Source:** {normalized_data['metadata']['source']}")
-    lines.append("")
-    lines.append("## Executive Summary")
-    lines.append(
-        "This MVP report summarizes mock GTI findings for a quick internship "
-        "demo workflow."
-    )
-    lines.append("")
-    lines.append("## Industries Impacted")
 
-    if normalized_data["industries"]:
-        for industry in normalized_data["industries"]:
-            lines.append(f"- {industry}")
-    else:
-        lines.append("- No industries were returned by the data source.")
+    if "Executive Summary" in sections:
+        _append_section(
+            lines,
+            "Executive Summary",
+            [
+                _build_threat_landscape_summary(
+                    normalized_data=normalized_data,
+                    report_type=report_type,
+                    year=year,
+                    report_target=report_target,
+                )
+            ],
+        )
 
-    lines.append("")
-    lines.append("## Affected Companies")
+    if "Technical Details" in sections:
+        technical_details = [
+            f"- Report Type: {report_type}",
+            f"- Reporting Year: {year}",
+            f"- Industries Returned: {len(normalized_data['industries'])}",
+            f"- Affected Companies Returned: {len(normalized_data['affected_companies'])}",
+            f"- Threat Actors Returned: {len(normalized_data['threat_actors'])}",
+            f"- IoCs Returned: {len(normalized_data['iocs'])}",
+        ]
+        notes = normalized_data["metadata"].get("notes")
+        if notes:
+            technical_details.append(f"- Data Source Notes: {notes}")
+        _append_section(lines, "Technical Details", technical_details)
 
-    if normalized_data["affected_companies"]:
-        for company in normalized_data["affected_companies"]:
-            lines.append(
-                f"- **{company['name']}** ({company['industry']}): {company['summary']}"
+    if "IoCs" in sections:
+        ioc_lines = []
+        if normalized_data["iocs"]:
+            for ioc in normalized_data["iocs"]:
+                ioc_lines.append(
+                    f"- **{ioc['type']}** `{ioc['value']}`: {ioc['context']}"
+                )
+        else:
+            ioc_lines.append("- No IoCs were returned by the data source.")
+        _append_section(lines, "IoCs", ioc_lines)
+
+    if "Threat Actors" in sections:
+        actor_lines = []
+        if normalized_data["threat_actors"]:
+            for actor in normalized_data["threat_actors"]:
+                actor_lines.append(
+                    f"- **{actor['name']}** | Motivation: {actor['motivation']} | "
+                    f"Activity: {actor['activity']}"
+                )
+        else:
+            actor_lines.append("- No threat actors were returned by the data source.")
+        _append_section(lines, "Threat Actors", actor_lines)
+
+    if "Industries Impacted" in sections:
+        industry_lines = []
+        if normalized_data["industries"]:
+            for industry in normalized_data["industries"]:
+                industry_lines.append(f"- {industry}")
+        else:
+            industry_lines.append("- No industries were returned by the data source.")
+        _append_section(lines, "Industries Impacted", industry_lines)
+
+    if "Affected Companies" in sections:
+        company_lines = []
+        if normalized_data["affected_companies"]:
+            for company in normalized_data["affected_companies"]:
+                company_lines.append(
+                    f"- **{company['name']}** ({company['industry']}): "
+                    f"{company['summary']}"
+                )
+        else:
+            company_lines.append(
+                "- No affected companies were returned by the data source."
             )
-    else:
-        lines.append("- No affected companies were returned by the data source.")
+        _append_section(lines, "Affected Companies", company_lines)
 
-    lines.append("")
-    lines.append("## Threat Actors")
+    if "Recommended SOC Actions" in sections:
+        _append_section(
+            lines,
+            "Recommended SOC Actions",
+            _build_threat_landscape_soc_actions(normalized_data, report_target),
+        )
 
-    if normalized_data["threat_actors"]:
-        for actor in normalized_data["threat_actors"]:
-            lines.append(
-                f"- **{actor['name']}** | Motivation: {actor['motivation']} | "
-                f"Activity: {actor['activity']}"
-            )
-    else:
-        lines.append("- No threat actors were returned by the data source.")
+    if "Raw GTI Data" in sections:
+        _append_section(lines, "Raw GTI Data", _format_raw_data_block(raw_data))
 
-    lines.append("")
-    lines.append("## Indicators of Compromise (IOCs)")
-
-    if normalized_data["iocs"]:
-        for ioc in normalized_data["iocs"]:
-            lines.append(
-                f"- **{ioc['type']}** `{ioc['value']}`: {ioc['context']}"
-            )
-    else:
-        lines.append("- No IOCs were returned by the data source.")
-
-    notes = normalized_data["metadata"].get("notes")
-    if notes:
-        lines.append("")
-        lines.append("## Notes")
-        lines.append(notes)
-
-    return "\n".join
+    return "\n".join(lines)
 
 
-def generate_ioc_enrichment_markdown_report(enrichment_data: dict[str, Any]) -> str:
-    """Build a Markdown report for a VirusTotal domain enrichment lookup."""
+def generate_ioc_enrichment_markdown_report(
+    enrichment_data: dict[str, Any],
+    sections: list[str],
+) -> str:
+    """Build a configurable Markdown report for a domain enrichment lookup."""
 
     target = str(enrichment_data.get("indicator", "unknown"))
     source = str(enrichment_data.get("source", "gti_virustotal_v3"))
@@ -153,38 +262,164 @@ def generate_ioc_enrichment_markdown_report(enrichment_data: dict[str, Any]) -> 
     lines.append("")
     lines.append(f"**Target:** {target}")
     lines.append(f"**Source:** {source}")
-    lines.append(f"**Indicator Type:** {indicator_type}")
-    lines.append(f"**Reputation:** {reputation}")
-    lines.append("")
-    lines.append("## Detection Overview")
-    lines.append(f"- Malicious: {malicious}")
-    lines.append(f"- Suspicious: {suspicious}")
-    lines.append(f"- Harmless: {harmless}")
-    lines.append(f"- Undetected: {undetected}")
-    lines.append("")
-    lines.append("## Categories")
 
-    if isinstance(categories, dict) and categories:
-        for vendor, category in categories.items():
-            lines.append(f"- **{vendor}**: {category}")
-    else:
-        lines.append("- No categories were returned by the data source.")
-
-    lines.append("")
-    lines.append("## Analyst Summary")
-    lines.append(
-        _build_ioc_analyst_summary(
-            target=target,
-            reputation=reputation,
-            malicious=malicious,
-            suspicious=suspicious,
-            harmless=harmless,
-            undetected=undetected,
-            categories=categories,
+    if "Executive Summary" in sections:
+        _append_section(
+            lines,
+            "Executive Summary",
+            [
+                _build_ioc_analyst_summary(
+                    target=target,
+                    reputation=reputation,
+                    malicious=malicious,
+                    suspicious=suspicious,
+                    harmless=harmless,
+                    undetected=undetected,
+                    categories=categories,
+                )
+            ],
         )
-    )
+
+    if "Technical Details" in sections:
+        category_summary = _summarize_categories(categories)
+        _append_section(
+            lines,
+            "Technical Details",
+            [
+                f"- Indicator Type: {indicator_type}",
+                f"- Reputation: {reputation}",
+                (
+                    "- Detection Stats: "
+                    f"malicious {malicious} | suspicious {suspicious} | "
+                    f"harmless {harmless} | undetected {undetected}"
+                ),
+                f"- Categories: {category_summary}",
+            ],
+        )
+
+    if "IoCs" in sections:
+        _append_section(
+            lines,
+            "IoCs",
+            [
+                (
+                    f"- **{indicator_type}** `{target}`: Reputation {reputation} | "
+                    f"Malicious {malicious} | Suspicious {suspicious}"
+                )
+            ],
+        )
+
+    if "Threat Actors" in sections:
+        _append_section(
+            lines,
+            "Threat Actors",
+            [
+                "- No threat actor attribution was returned by the current "
+                "VirusTotal domain lookup."
+            ],
+        )
+
+    if "Industries Impacted" in sections:
+        _append_section(
+            lines,
+            "Industries Impacted",
+            [
+                "- The current VirusTotal domain lookup does not provide industry "
+                "impact mapping."
+            ],
+        )
+
+    if "Affected Companies" in sections:
+        _append_section(
+            lines,
+            "Affected Companies",
+            [
+                "- The current VirusTotal domain lookup does not identify "
+                "affected companies."
+            ],
+        )
+
+    if "Recommended SOC Actions" in sections:
+        _append_section(
+            lines,
+            "Recommended SOC Actions",
+            _build_ioc_soc_actions(
+                target=target,
+                reputation=reputation,
+                malicious=malicious,
+                suspicious=suspicious,
+            ),
+        )
+
+    if "Raw GTI Data" in sections:
+        _append_section(lines, "Raw GTI Data", _format_raw_data_block(enrichment_data))
 
     return "\n".join(lines)
+
+
+def _append_section(lines: list[str], title: str, content_lines: list[str]) -> None:
+    """Append a titled section to the report."""
+
+    lines.append("")
+    lines.append(f"## {title}")
+    lines.extend(content_lines)
+
+
+def _build_threat_landscape_summary(
+    normalized_data: dict[str, Any],
+    report_type: str,
+    year: int,
+    report_target: str,
+) -> str:
+    """Create a short analyst-style summary for a threat landscape report."""
+
+    industry_count = len(normalized_data["industries"])
+    company_count = len(normalized_data["affected_companies"])
+    actor_count = len(normalized_data["threat_actors"])
+    ioc_count = len(normalized_data["iocs"])
+
+    return (
+        f"This {report_type.lower()} report for {report_target} in {year} summarizes "
+        f"{industry_count} impacted industries, {company_count} affected companies, "
+        f"{actor_count} tracked threat actors, and {ioc_count} reported IoCs. "
+        "Use the selected sections below as a lightweight analyst handoff for "
+        "triage, threat hunting, and stakeholder updates."
+    )
+
+
+def _build_threat_landscape_soc_actions(
+    normalized_data: dict[str, Any],
+    report_target: str,
+) -> list[str]:
+    """Generate simple SOC actions from the mock threat landscape data."""
+
+    actions = [
+        (
+            "- Hunt across email, DNS, proxy, EDR, and identity telemetry for the "
+            f"listed indicators associated with {report_target}."
+        ),
+        (
+            "- Prioritize detections tied to phishing, ransomware, and cloud identity "
+            "abuse themes highlighted in the current dataset."
+        ),
+    ]
+
+    if normalized_data["threat_actors"]:
+        actor_names = ", ".join(
+            actor["name"] for actor in normalized_data["threat_actors"][:3]
+        )
+        actions.append(
+            f"- Track tradecraft associated with {actor_names} in watchlists and "
+            "ongoing detection tuning."
+        )
+
+    if normalized_data["affected_companies"]:
+        actions.append(
+            "- Review whether peer organizations, suppliers, or internal business "
+            "units share exposure patterns with the affected companies in this report."
+        )
+
+    return actions
 
 
 def _build_ioc_analyst_summary(
@@ -219,18 +454,76 @@ def _build_ioc_analyst_summary(
             "verdict(s), so it should be correlated with surrounding context."
         )
 
+    return (
+        f"{verdict_summary} Categories reported by the data source: "
+        f"{_summarize_categories(categories)}."
+    )
+
+
+def _build_ioc_soc_actions(
+    target: str,
+    reputation: int,
+    malicious: int,
+    suspicious: int,
+) -> list[str]:
+    """Generate simple SOC actions from an enrichment lookup."""
+
+    if malicious > 0 or suspicious > 0:
+        return [
+            (
+                f"- Block or closely monitor `{target}` across DNS, proxy, email, "
+                "and endpoint telemetry while triage is in progress."
+            ),
+            (
+                "- Pivot on passive DNS, WHOIS, certificate history, and related "
+                "infrastructure to uncover adjacent indicators."
+            ),
+            (
+                "- Review recent user clicks, outbound connections, and credential "
+                "events that reference this domain."
+            ),
+        ]
+
+    if reputation < 0:
+        return [
+            (
+                f"- Flag `{target}` for enhanced monitoring and review any recent "
+                "connections before applying a hard block."
+            ),
+            (
+                "- Correlate the domain with DNS history, sandbox results, and "
+                "internal detections to confirm whether the negative reputation is actionable."
+            ),
+        ]
+
+    return [
+        (
+            f"- Keep `{target}` under observation and re-check enrichment if new "
+            "alerts, user reports, or infrastructure pivots appear."
+        ),
+        (
+            "- Preserve the lookup context in the case notes so analysts can compare "
+            "future changes in reputation and detection counts."
+        ),
+    ]
+
+
+def _format_raw_data_block(raw_data: dict[str, Any]) -> list[str]:
+    """Format raw JSON data as a fenced code block."""
+
+    return [
+        "```json",
+        json.dumps(raw_data, indent=2, sort_keys=True),
+        "```",
+    ]
+
+
+def _summarize_categories(categories: Any) -> str:
+    """Return category labels as a compact string."""
+
     if isinstance(categories, dict) and categories:
-        category_summary = ", ".join(
+        return "; ".join(
             f"{vendor}: {category}" for vendor, category in categories.items()
         )
-        return (
-            f"{verdict_summary} Reported categories include {category_summary}. "
-            "Use the enrichment result alongside DNS, WHOIS, and internal detections "
-            "before making a trust decision."
-        )
 
-    return (
-        f"{verdict_summary} No category labels were returned by the API. Use the "
-        "enrichment result alongside DNS, WHOIS, and internal detections before "
-        "making a trust decision."
-    )
+    return "none returned"
