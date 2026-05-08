@@ -13,9 +13,14 @@ import requests
 VIRUSTOTAL_DOMAIN_LOOKUP_URL = "https://www.virustotal.com/api/v3/domains/{}"
 VIRUSTOTAL_COLLECTIONS_URL = "https://www.virustotal.com/api/v3/collections"
 VIRUSTOTAL_SEARCH_URL = "https://www.virustotal.com/api/v3/search"
+VIRUSTOTAL_INTELLIGENCE_SEARCH_URL = (
+    "https://www.virustotal.com/api/v3/intelligence/search"
+)
 VIRUSTOTAL_DTM_MONITORS_URL = "https://www.virustotal.com/api/v3/dtm/monitors"
 VIRUSTOTAL_DTM_ALERTS_URL = "https://www.virustotal.com/api/v3/dtm/alerts"
 MAX_SAFE_DTM_PAGES = 5
+DEFAULT_INTELLIGENCE_SEARCH_LIMIT = 10
+MAX_INTELLIGENCE_SEARCH_LIMIT = 40
 DEFAULT_DTM_MONITOR_PAGE_SIZE = 50
 DEFAULT_DTM_ALERT_PAGE_SIZE = 25
 MAX_DTM_ALERT_PAGE_SIZE = 25
@@ -164,6 +169,102 @@ def explore_industry_snapshots(api_key: str) -> dict[str, Any]:
         "snapshots": snapshots,
         "endpoint_results": endpoint_results,
         "raw_json": {result["endpoint_name"]: result["raw_json"] for result in endpoint_results},
+    }
+
+
+def intelligence_search(
+    api_key: str,
+    query: str,
+    limit: int = DEFAULT_INTELLIGENCE_SEARCH_LIMIT,
+    descriptors_only: bool = False,
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """Run a GTI Intelligence Search query and return a safe preview."""
+
+    normalized_api_key = api_key.strip()
+    normalized_query = query.strip()
+    normalized_cursor = cursor.strip() if cursor else ""
+
+    if not normalized_api_key:
+        raise ValueError("A GTI/VirusTotal API key is required for GTI Intelligence Search.")
+    if not normalized_query:
+        raise ValueError("A search query is required for GTI Intelligence Search.")
+    if limit < 1:
+        raise ValueError("The GTI Intelligence Search limit must be at least 1.")
+
+    normalized_limit = min(limit, MAX_INTELLIGENCE_SEARCH_LIMIT)
+    params: dict[str, Any] = {
+        "query": normalized_query,
+        "limit": normalized_limit,
+        "descriptors_only": "true" if descriptors_only else "false",
+    }
+    if normalized_cursor:
+        params["cursor"] = normalized_cursor
+
+    endpoint_result = _probe_json_endpoint(
+        api_key=normalized_api_key,
+        url=VIRUSTOTAL_INTELLIGENCE_SEARCH_URL,
+        params=params,
+        endpoint_name="intelligence_search",
+    )
+
+    payload = endpoint_result["raw_json"]
+    next_cursor = _extract_next_cursor(payload)
+
+    if not next_cursor:
+        next_link_url = _extract_next_link_from_headers(
+            endpoint_result.get("response_headers", {})
+        )
+        if next_link_url:
+            next_cursor = _extract_cursor_from_url(next_link_url)
+
+    simplified_preview = [
+        _simplify_intelligence_search_item(item)
+        for item in _extract_api_items(payload)
+    ]
+
+    return {
+        "status_code": int(endpoint_result["http_status"]),
+        "total_collected": len(simplified_preview),
+        "next_cursor": next_cursor,
+        "simplified_preview": simplified_preview,
+        "raw_data": payload,
+    }
+
+
+def get_collection_details(
+    api_key: str,
+    collection_id: str,
+) -> dict[str, Any]:
+    """Fetch one GTI collection and extract analyzer-friendly fields."""
+
+    normalized_api_key = api_key.strip()
+    normalized_collection_id = collection_id.strip()
+
+    if not normalized_api_key:
+        raise ValueError("A GTI/VirusTotal API key is required for collection analysis.")
+    if not normalized_collection_id:
+        raise ValueError("A collection ID is required for collection analysis.")
+
+    endpoint_result = _probe_json_endpoint(
+        api_key=normalized_api_key,
+        url=f"{VIRUSTOTAL_COLLECTIONS_URL}/{quote(normalized_collection_id, safe='')}",
+        params=None,
+        endpoint_name="collection_details",
+    )
+
+    payload = endpoint_result["raw_json"]
+    collection_item = next(iter(_extract_api_items(payload)), {})
+    analyzer_fields = _extract_collection_analyzer_fields(collection_item)
+
+    return {
+        "status_code": int(endpoint_result["http_status"]),
+        "collection_id": normalized_collection_id,
+        "experimental_exposure_score": _compute_gti_exposure_score(
+            analyzer_fields.get("counters")
+        ),
+        "analysis": analyzer_fields,
+        "raw_data": payload,
     }
 
 
@@ -662,6 +763,139 @@ def _collect_industry_snapshot_matches(
     return snapshots
 
 
+def _simplify_intelligence_search_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Keep only explicitly requested intelligence-search preview fields."""
+
+    attributes = item.get("attributes", {})
+    normalized_attributes = attributes if isinstance(attributes, dict) else {}
+    normalized_type = _stringify_value(
+        _extract_exact_field(item, normalized_attributes, "type")
+    )
+
+    base_preview = {
+        "id": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "id")
+        ),
+        "type": _normalize_collection_field(normalized_type),
+    }
+
+    if normalized_type and normalized_type.casefold() == "file":
+        return {
+            **base_preview,
+            "meaningful_name": _normalize_collection_field(
+                _extract_exact_field(item, normalized_attributes, "meaningful_name")
+            ),
+            "reputation": _normalize_collection_field(
+                _extract_exact_field(item, normalized_attributes, "reputation")
+            ),
+            "last_analysis_stats": _normalize_collection_field(
+                _extract_exact_field(item, normalized_attributes, "last_analysis_stats")
+            ),
+        }
+
+    if normalized_type and normalized_type.casefold() == "collection":
+        return {
+            **base_preview,
+            "name": _normalize_collection_field(
+                _extract_exact_field(item, normalized_attributes, "name")
+            ),
+            "title": _normalize_collection_field(
+                _extract_exact_field(item, normalized_attributes, "title")
+            ),
+            "collection_type": _normalize_collection_field(
+                _extract_exact_field(item, normalized_attributes, "collection_type")
+            ),
+            "creation_date": _normalize_collection_field(
+                _extract_exact_field(item, normalized_attributes, "creation_date")
+            ),
+            "targeted_industries": _normalize_collection_field(
+                _extract_exact_field(item, normalized_attributes, "targeted_industries")
+            ),
+            "targeted_regions": _normalize_collection_field(
+                _extract_exact_field(item, normalized_attributes, "targeted_regions")
+            ),
+            "source_regions": _normalize_collection_field(
+                _extract_exact_field(item, normalized_attributes, "source_regions")
+            ),
+            "tags": _normalize_collection_field(
+                _extract_exact_field(item, normalized_attributes, "tags")
+            ),
+            "attributes_keys": sorted(str(key) for key in normalized_attributes.keys()),
+        }
+
+    return {
+        **base_preview,
+        "name": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "name")
+        ),
+        "title": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "title")
+        ),
+        "meaningful_name": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "meaningful_name")
+        ),
+        "attributes_keys": sorted(str(key) for key in normalized_attributes.keys()),
+    }
+
+
+def _extract_collection_analyzer_fields(item: dict[str, Any]) -> dict[str, Any]:
+    """Return the requested Industry Profile Analyzer fields for one collection."""
+
+    attributes = item.get("attributes", {})
+    normalized_attributes = attributes if isinstance(attributes, dict) else {}
+
+    return {
+        "name": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "name")
+        ),
+        "collection_type": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "collection_type")
+        ),
+        "osint_summary": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "osint_summary")
+        ),
+        "recent_activity_summary": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "recent_activity_summary")
+        ),
+        "counters": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "counters")
+        ),
+        "aggregations": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "aggregations")
+        ),
+        "profile_stats": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "profile_stats")
+        ),
+        "targeted_industries": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "targeted_industries")
+        ),
+        "targeted_regions": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "targeted_regions")
+        ),
+        "source_region": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "source_region")
+        ),
+        "source_regions_hierarchy": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "source_regions_hierarchy")
+        ),
+        "malware_roles": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "malware_roles")
+        ),
+        "motivations": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "motivations")
+        ),
+        "merged_actors": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "merged_actors")
+        ),
+        "threat_activity_drivers": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "threat_activity_drivers")
+        ),
+        "collection_links": _normalize_collection_field(
+            _extract_exact_field(item, normalized_attributes, "collection_links")
+        ),
+    }
+
+
 def _extract_monitor_context(
     item: dict[str, Any],
     attributes: dict[str, Any],
@@ -779,6 +1013,21 @@ def _first_present(attributes: dict[str, Any], keys: tuple[str, ...]) -> Any:
     return None
 
 
+def _extract_exact_field(
+    item: dict[str, Any],
+    attributes: dict[str, Any],
+    key: str,
+) -> Any:
+    """Return an exact top-level or attributes field without schema guessing."""
+
+    if key in item:
+        return item.get(key)
+    if key in attributes:
+        return attributes.get(key)
+
+    return None
+
+
 def _normalize_collection_field(value: Any) -> Any:
     """Keep simple API values as-is while making complex types renderable."""
 
@@ -795,6 +1044,24 @@ def _normalize_collection_field(value: Any) -> Any:
         return {str(key): _normalize_collection_field(item) for key, item in value.items()}
 
     return str(value)
+
+
+def _compute_gti_exposure_score(counters: Any) -> int:
+    """Compute the experimental score from GTI counter fields when present."""
+
+    if not isinstance(counters, dict):
+        return 0
+
+    return sum(
+        _safe_int(counters.get(counter_name))
+        for counter_name in (
+            "domains_count",
+            "urls_count",
+            "ip_addresses_count",
+            "files_count",
+            "references_count",
+        )
+    )
 
 
 def _matches_primary_domain_raw_json(raw_item: Any, normalized_primary_domain: str) -> bool:

@@ -13,6 +13,8 @@ from backend.gti_client import (
     GTIClientError,
     MockGTIClient,
     explore_industry_snapshots,
+    get_collection_details,
+    intelligence_search,
     list_dtm_alerts,
     list_dtm_monitors,
     lookup_domain,
@@ -79,6 +81,29 @@ class ExplorerRequest(BaseModel):
     monitor_id: str | None = Field(default=None)
 
 
+class IntelligenceSearchRequest(BaseModel):
+    """Input payload for the GTI Intelligence Search workflow."""
+
+    api_key: str = Field(..., description="GTI or VirusTotal API key.")
+    query: str = Field(..., description="GTI Intelligence Search query.")
+    limit: int = Field(default=10, ge=1, description="Requested result page size.")
+    descriptors_only: bool = Field(
+        default=False,
+        description="Request descriptors_only mode from the GTI API.",
+    )
+    cursor: str | None = Field(
+        default=None,
+        description="Optional pagination cursor for the next GTI page.",
+    )
+
+
+class CollectionDetailsRequest(BaseModel):
+    """Input payload for the Industry Profile Analyzer workflow."""
+
+    api_key: str = Field(..., description="GTI or VirusTotal API key.")
+    collection_id: str = Field(..., description="GTI collection identifier.")
+
+
 class IndustrySnapshotExplorerResponse(BaseModel):
     """Response payload returned by the Industry Snapshot explorer."""
 
@@ -126,6 +151,28 @@ class DTMAlertExplorerResponse(BaseModel):
     raw_json: Any
 
 
+class IntelligenceSearchResponse(BaseModel):
+    """Response payload returned by the GTI Intelligence Search workflow."""
+
+    status: str
+    status_code: int
+    total_collected: int
+    next_cursor: str | None = None
+    simplified_preview: list[dict[str, Any]]
+    raw_data: Any
+
+
+class CollectionDetailsResponse(BaseModel):
+    """Response payload returned by the Industry Profile Analyzer workflow."""
+
+    status: str
+    status_code: int
+    collection_id: str
+    experimental_exposure_score: int
+    analysis: dict[str, Any]
+    raw_data: Any
+
+
 @app.get("/", include_in_schema=False)
 def serve_index() -> FileResponse:
     """Serve the single-page frontend from the FastAPI backend."""
@@ -157,7 +204,11 @@ def generate_report(request: GenerateReportRequest) -> GenerateReportResponse:
         if request.report_type == "Industry Snapshot Explorer":
             raise ValueError("Use the explorer button for this report type.")
         if request.report_type == "Company Exposure / DTM":
-            raise ValueError("Use the Test DTM Monitors or Test DTM Alerts buttons for this report type.")
+            raise ValueError(
+                "Use the Test DTM Monitors or Test DTM Alerts buttons for this report type."
+            )
+        if request.report_type == "GTI Intelligence Search":
+            raise ValueError("Use the Search GTI button for this report type.")
 
         normalized_sections = normalize_requested_sections(request.sections)
         normalized_output_format = normalize_output_format(request.output_format)
@@ -317,6 +368,75 @@ def explore_dtm_alert_workflow(
             endpoint_results=exploration_result["endpoint_results"],
             raw_data=exploration_result["raw_data"],
             raw_json=exploration_result["raw_json"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GTIClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post(
+    "/explore/intelligence-search",
+    response_model=IntelligenceSearchResponse,
+)
+def explore_intelligence_search_workflow(
+    request: IntelligenceSearchRequest,
+) -> IntelligenceSearchResponse:
+    """Run GTI Intelligence Search and return a simplified preview."""
+
+    try:
+        exploration_result = intelligence_search(
+            api_key=request.api_key,
+            query=request.query,
+            limit=request.limit,
+            descriptors_only=request.descriptors_only,
+            cursor=request.cursor,
+        )
+
+        status_code = int(exploration_result["status_code"])
+        status = "success" if status_code == 200 else "upstream_error"
+
+        return IntelligenceSearchResponse(
+            status=status,
+            status_code=status_code,
+            total_collected=int(exploration_result["total_collected"]),
+            next_cursor=exploration_result["next_cursor"],
+            simplified_preview=exploration_result["simplified_preview"],
+            raw_data=exploration_result["raw_data"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GTIClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post(
+    "/explore/collection-details",
+    response_model=CollectionDetailsResponse,
+)
+def analyze_collection_workflow(
+    request: CollectionDetailsRequest,
+) -> CollectionDetailsResponse:
+    """Fetch detailed GTI collection fields for the Industry Profile Analyzer."""
+
+    try:
+        analysis_result = get_collection_details(
+            api_key=request.api_key,
+            collection_id=request.collection_id,
+        )
+
+        status_code = int(analysis_result["status_code"])
+        status = "success" if status_code == 200 else "upstream_error"
+
+        return CollectionDetailsResponse(
+            status=status,
+            status_code=status_code,
+            collection_id=str(analysis_result["collection_id"]),
+            experimental_exposure_score=int(
+                analysis_result["experimental_exposure_score"]
+            ),
+            analysis=analysis_result["analysis"],
+            raw_data=analysis_result["raw_data"],
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

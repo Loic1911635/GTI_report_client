@@ -9,6 +9,11 @@ const rawJsonOutput = document.getElementById("raw-json-output");
 const messageBanner = document.getElementById("message-banner");
 const statusPill = document.getElementById("status-pill");
 const reportTypeField = document.getElementById("report_type");
+const intelligenceSearchFields = document.getElementById("intelligence-search-fields");
+const intelligenceQueryField = document.getElementById("intelligence_query");
+const intelligenceLimitField = document.getElementById("intelligence_limit");
+const intelligenceDescriptorsOnlyField = document.getElementById("intelligence_descriptors_only");
+const intelligencePresetButtons = document.querySelectorAll("[data-intelligence-query]");
 const companyDtmFields = document.getElementById("company-dtm-fields");
 const companyNameField = document.getElementById("company_name");
 const primaryDomainField = document.getElementById("primary_domain");
@@ -26,14 +31,21 @@ const explorerButton = document.getElementById("explorer-button");
 const companyDtmActions = document.getElementById("company-dtm-actions");
 const dtmMonitorsButton = document.getElementById("dtm-monitors-button");
 const dtmAlertsButton = document.getElementById("dtm-alerts-button");
+const intelligenceSearchActions = document.getElementById("intelligence-search-actions");
+const intelligenceSearchButton = document.getElementById("intelligence-search-button");
 
 const IOC_ENRICHMENT = "IoC Enrichment";
 const INDUSTRY_SNAPSHOT_EXPLORER = "Industry Snapshot Explorer";
 const COMPANY_EXPOSURE_DTM = "Company Exposure / DTM";
+const GTI_INTELLIGENCE_SEARCH = "GTI Intelligence Search";
 
 let lastGeneratedReport = "";
 let lastDownloadFilename = "";
 let lastDownloadFormat = "markdown";
+let lastIntelligenceSearchResponse = null;
+let lastCollectionAnalysisResponse = null;
+let activeCollectionAnalysisId = "";
+let collectionAnalysisInProgressId = "";
 
 function escapeHtml(text) {
     return text
@@ -195,6 +207,12 @@ function setCompanyDtmLoadingState(isLoading, action) {
     updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
 }
 
+function setIntelligenceSearchLoadingState(isLoading) {
+    intelligenceSearchButton.disabled = isLoading;
+    intelligenceSearchButton.textContent = isLoading ? "Searching..." : "Search GTI";
+    updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
+}
+
 function getSelectedSections() {
     return Array.from(
         document.querySelectorAll('input[name="sections"]:checked'),
@@ -223,21 +241,30 @@ function syncTargetRequirement() {
     );
     const isCompanyExposureDtm = reportTypeField.value === COMPANY_EXPOSURE_DTM;
     const isIocEnrichment = reportTypeField.value === IOC_ENRICHMENT;
+    const isIntelligenceSearch = reportTypeField.value === GTI_INTELLIGENCE_SEARCH;
 
-    scopeFields.hidden = isExplorerMode || isCompanyExposureDtm;
-    reportSectionsGroup.hidden = isExplorerMode || isCompanyExposureDtm;
-    outputFormatGroup.hidden = isExplorerMode || isCompanyExposureDtm;
-    reportActions.hidden = isExplorerMode || isCompanyExposureDtm;
+    scopeFields.hidden = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch;
+    reportSectionsGroup.hidden = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch;
+    outputFormatGroup.hidden = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch;
+    reportActions.hidden = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch;
     explorerActions.hidden = !isExplorerMode;
+    intelligenceSearchFields.hidden = !isIntelligenceSearch;
+    intelligenceSearchActions.hidden = !isIntelligenceSearch;
     companyDtmFields.hidden = !isCompanyExposureDtm;
     companyDtmActions.hidden = !isCompanyExposureDtm;
 
-    targetField.required = isIocEnrichment && !isExplorerMode && !isCompanyExposureDtm;
+    targetField.required = (
+        isIocEnrichment
+        && !isExplorerMode
+        && !isCompanyExposureDtm
+        && !isIntelligenceSearch
+    );
+    intelligenceQueryField.required = isIntelligenceSearch;
     targetField.placeholder = isIocEnrichment ? "example.com" : "Company, region, or industry";
     targetLabel.textContent = isIocEnrichment ? "Target Domain" : "Target (Optional)";
     explorerButton.textContent = getExplorerButtonLabel();
 
-    if (isExplorerMode || isCompanyExposureDtm) {
+    if (isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch) {
         lastGeneratedReport = "";
         setDownloadState(false);
     }
@@ -393,6 +420,166 @@ function renderCompanyDtmContext() {
         <p><strong>Primary Domain:</strong> ${formatApiValue(primaryDomainField.value.trim())}</p>
         <p><strong>Keywords:</strong> ${formatApiValue(keywordsField.value.trim())}</p>
         <p><strong>Monitor ID:</strong> ${formatApiValue(monitorIdField.value.trim())}</p>
+    `;
+}
+
+function renderPreviewField(label, value) {
+    return `
+        <div class="preview-row">
+            <span class="preview-label">${escapeHtml(label)}</span>
+            <div class="preview-value">${formatApiValue(value)}</div>
+        </div>
+    `;
+}
+
+function getCollectionDisplayLabel(item) {
+    if (item.title && item.name && item.title !== item.name) {
+        return `${String(item.title)} | ${String(item.name)}`;
+    }
+
+    return item.title || item.name;
+}
+
+function renderCollectionAnalyzeAction(item) {
+    const normalizedType = String(item.type || "").toLowerCase();
+    const collectionId = item.id ? String(item.id) : "";
+
+    if (normalizedType !== "collection" || !collectionId) {
+        return "";
+    }
+
+    const isAnalyzing = collectionAnalysisInProgressId === collectionId;
+    const buttonStateClass = activeCollectionAnalysisId === collectionId
+        ? "selected-action-button"
+        : "";
+
+    return `
+        <div class="preview-card-actions">
+            <button
+                type="button"
+                class="generate-button secondary-button inline-action-button ${buttonStateClass}"
+                data-analyze-collection-id="${escapeHtml(collectionId)}"
+                ${isAnalyzing ? "disabled" : ""}
+            >
+                ${isAnalyzing ? "Analyzing selected collection..." : "Analyze selected collection"}
+            </button>
+        </div>
+    `;
+}
+
+function renderIntelligenceSearchCard(item) {
+    const normalizedType = String(item.type || "").toLowerCase();
+
+    if (normalizedType === "file") {
+        return `
+            <article class="preview-card">
+                ${renderPreviewField("ID", item.id)}
+                ${renderPreviewField("Type", item.type)}
+                ${renderPreviewField("Meaningful Name", item.meaningful_name)}
+                ${renderPreviewField("Reputation", item.reputation)}
+                ${renderPreviewField("Last Analysis Stats", item.last_analysis_stats)}
+            </article>
+        `;
+    }
+
+    if (normalizedType !== "collection") {
+        return `
+            <article class="preview-card">
+                ${renderPreviewField("ID", item.id)}
+                ${renderPreviewField("Type", item.type)}
+                ${renderPreviewField("Title", item.title)}
+                ${renderPreviewField("Name", item.name)}
+                ${renderPreviewField("Meaningful Name", item.meaningful_name)}
+                ${renderPreviewField("Attributes Keys", item.attributes_keys)}
+            </article>
+        `;
+    }
+
+    return `
+        <article class="preview-card">
+            ${renderPreviewField("ID", item.id)}
+            ${renderPreviewField("Type", item.type)}
+            ${renderPreviewField("Title / Name", getCollectionDisplayLabel(item))}
+            ${renderPreviewField("Collection Type", item.collection_type)}
+            ${renderPreviewField("Creation Date", item.creation_date)}
+            ${renderPreviewField("Targeted Industries", item.targeted_industries)}
+            ${renderPreviewField("Targeted Regions", item.targeted_regions)}
+            ${renderPreviewField("Source Regions", item.source_regions)}
+            ${renderPreviewField("Tags", item.tags)}
+            ${renderPreviewField("Attributes Keys", item.attributes_keys)}
+            ${renderCollectionAnalyzeAction(item)}
+        </article>
+    `;
+}
+
+function renderCollectionAnalysisPanel(responseData) {
+    const analysis = responseData && typeof responseData.analysis === "object"
+        ? responseData.analysis
+        : {};
+
+    return `
+        <section class="analysis-panel">
+            <h2>Industry Profile Analyzer</h2>
+            <p><strong>Selected Collection ID:</strong> ${formatApiValue(responseData.collection_id)}</p>
+            <p><strong>Status Code:</strong> ${escapeHtml(String(responseData.status_code))}</p>
+            <div class="score-callout">
+                <p><strong>GTI Exposure Score:</strong> ${escapeHtml(String(responseData.experimental_exposure_score ?? 0))}</p>
+                <p>Experimental score based on GTI object counters, not a confirmed attack count.</p>
+            </div>
+            <div class="analysis-grid">
+                ${renderPreviewField("Name", analysis.name)}
+                ${renderPreviewField("Collection Type", analysis.collection_type)}
+                ${renderPreviewField("OSINT Summary", analysis.osint_summary)}
+                ${renderPreviewField("Recent Activity Summary", analysis.recent_activity_summary)}
+                ${renderPreviewField("Counters", analysis.counters)}
+                ${renderPreviewField("Aggregations", analysis.aggregations)}
+                ${renderPreviewField("Profile Stats", analysis.profile_stats)}
+                ${renderPreviewField("Targeted Industries", analysis.targeted_industries)}
+                ${renderPreviewField("Targeted Regions", analysis.targeted_regions)}
+                ${renderPreviewField("Source Region", analysis.source_region)}
+                ${renderPreviewField("Source Regions Hierarchy", analysis.source_regions_hierarchy)}
+                ${renderPreviewField("Malware Roles", analysis.malware_roles)}
+                ${renderPreviewField("Motivations", analysis.motivations)}
+                ${renderPreviewField("Merged Actors", analysis.merged_actors)}
+                ${renderPreviewField("Threat Activity Drivers", analysis.threat_activity_drivers)}
+                ${renderPreviewField("Collection Links", analysis.collection_links)}
+            </div>
+            ${renderRawJsonDetails(responseData.raw_data)}
+        </section>
+    `;
+}
+
+function renderIntelligenceSearchResult(
+    responseData,
+    collectionAnalysisResponse = lastCollectionAnalysisResponse,
+) {
+    const previewItems = Array.isArray(responseData.simplified_preview)
+        ? responseData.simplified_preview
+        : [];
+    const previewCardsHtml = previewItems.length > 0
+        ? `
+            <div class="preview-grid">
+                ${previewItems.map((item) => renderIntelligenceSearchCard(item)).join("")}
+            </div>
+        `
+        : "<p>No GTI objects were returned for the current page.</p>";
+    const analysisHtml = collectionAnalysisResponse
+        ? renderCollectionAnalysisPanel(collectionAnalysisResponse)
+        : "";
+
+    reportOutput.classList.remove("empty-state");
+    reportOutput.innerHTML = `
+        <h1>GTI Intelligence Search</h1>
+        <p><strong>Search Query:</strong> ${formatApiValue(intelligenceQueryField.value.trim())}</p>
+        <p><strong>Requested Limit:</strong> ${formatApiValue(Number(intelligenceLimitField.value || 10))}</p>
+        <p><strong>Descriptors Only:</strong> ${formatApiValue(intelligenceDescriptorsOnlyField.checked)}</p>
+        <p><strong>Status Code:</strong> ${escapeHtml(String(responseData.status_code))}</p>
+        <p><strong>Total Collected:</strong> ${escapeHtml(String(responseData.total_collected || 0))}</p>
+        <p><strong>Next Cursor:</strong> ${formatApiValue(responseData.next_cursor)}</p>
+        <h2>Simplified Preview</h2>
+        ${previewCardsHtml}
+        ${analysisHtml}
+        ${renderRawJsonDetails(responseData.raw_data)}
     `;
 }
 
@@ -571,6 +758,162 @@ async function runSelectedExplorer() {
     }
 }
 
+function buildIntelligenceSearchPayload() {
+    return {
+        api_key: apiKeyField.value.trim(),
+        query: intelligenceQueryField.value.trim(),
+        limit: Number(intelligenceLimitField.value || 10),
+        descriptors_only: intelligenceDescriptorsOnlyField.checked,
+    };
+}
+
+function applyIntelligenceQueryPreset(event) {
+    const presetQuery = event.currentTarget.dataset.intelligenceQuery || "";
+    intelligenceQueryField.value = presetQuery;
+    intelligenceQueryField.focus();
+    intelligenceQueryField.setSelectionRange(
+        intelligenceQueryField.value.length,
+        intelligenceQueryField.value.length,
+    );
+}
+
+function refreshIntelligenceSearchView() {
+    if (!lastIntelligenceSearchResponse) {
+        return;
+    }
+
+    renderIntelligenceSearchResult(
+        lastIntelligenceSearchResponse,
+        lastCollectionAnalysisResponse,
+    );
+}
+
+async function analyzeSelectedCollection(collectionId) {
+    if (!collectionId) {
+        return;
+    }
+
+    clearMessage();
+    collectionAnalysisInProgressId = collectionId;
+    refreshIntelligenceSearchView();
+    updateStatus("Running", "running");
+
+    try {
+        const response = await fetch("/explore/collection-details", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                api_key: apiKeyField.value.trim(),
+                collection_id: collectionId,
+            }),
+        });
+
+        const responseData = await response.json();
+        if (!response.ok) {
+            const errorMessage = responseData.detail || "The backend returned an error.";
+            throw new Error(errorMessage);
+        }
+
+        lastCollectionAnalysisResponse = responseData;
+        activeCollectionAnalysisId = collectionId;
+        refreshIntelligenceSearchView();
+        rawJsonOutput.textContent = JSON.stringify(responseData.raw_data, null, 2);
+
+        if (responseData.status_code === 200) {
+            updateStatus("HTTP 200", "success");
+            showMessage(
+                `Collection analysis completed for ${collectionId}. Experimental exposure score: ${responseData.experimental_exposure_score}.`,
+                "success",
+            );
+        } else {
+            updateStatus(`HTTP ${responseData.status_code}`, "error");
+            showMessage(
+                `The collection details endpoint responded with HTTP ${responseData.status_code}. Review the raw JSON below.`,
+                "error",
+            );
+        }
+    } catch (error) {
+        updateStatus("Error", "error");
+        showMessage(error.message || "Collection analysis failed.", "error");
+    } finally {
+        collectionAnalysisInProgressId = "";
+        refreshIntelligenceSearchView();
+
+        if (!statusPill.classList.contains("success") && !statusPill.classList.contains("error")) {
+            updateStatus("Idle", "idle");
+        }
+    }
+}
+
+async function searchGtiIntelligence() {
+    if (!reportForm.reportValidity()) {
+        return;
+    }
+
+    clearMessage();
+    setIntelligenceSearchLoadingState(true);
+    setDownloadState(false);
+    lastGeneratedReport = "";
+
+    try {
+        const response = await fetch("/explore/intelligence-search", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(buildIntelligenceSearchPayload()),
+        });
+
+        const responseData = await response.json();
+        if (!response.ok) {
+            const errorMessage = responseData.detail || "The backend returned an error.";
+            throw new Error(errorMessage);
+        }
+
+        lastIntelligenceSearchResponse = responseData;
+        lastCollectionAnalysisResponse = null;
+        activeCollectionAnalysisId = "";
+        collectionAnalysisInProgressId = "";
+        renderIntelligenceSearchResult(responseData);
+        rawJsonOutput.textContent = JSON.stringify(responseData.raw_data, null, 2);
+
+        if (responseData.status_code === 200) {
+            updateStatus("HTTP 200", "success");
+            showMessage(
+                `GTI Intelligence Search completed. ${responseData.total_collected} object(s) returned in the current page.`,
+                "success",
+            );
+        } else {
+            updateStatus(`HTTP ${responseData.status_code}`, "error");
+            showMessage(
+                `The endpoint responded with HTTP ${responseData.status_code}. Review the raw JSON below.`,
+                "error",
+            );
+        }
+    } catch (error) {
+        reportOutput.classList.add("empty-state");
+        reportOutput.innerHTML = `
+            <h3>GTI Intelligence Search failed</h3>
+            <p>${escapeHtml(error.message || "Unknown error.")}</p>
+        `;
+        rawJsonOutput.textContent = "No valid JSON payload was returned.";
+        updateStatus("Error", "error");
+        lastIntelligenceSearchResponse = null;
+        lastCollectionAnalysisResponse = null;
+        activeCollectionAnalysisId = "";
+        collectionAnalysisInProgressId = "";
+        showMessage(error.message || "GTI Intelligence Search failed.", "error");
+    } finally {
+        setIntelligenceSearchLoadingState(false);
+
+        if (!statusPill.classList.contains("success") && !statusPill.classList.contains("error")) {
+            updateStatus("Idle", "idle");
+        }
+    }
+}
+
 function buildCompanyDtmPayload() {
     return {
         api_key: apiKeyField.value.trim(),
@@ -718,6 +1061,11 @@ async function generateReport(event) {
         return;
     }
 
+    if (reportTypeField.value === GTI_INTELLIGENCE_SEARCH) {
+        await searchGtiIntelligence();
+        return;
+    }
+
     if (!reportForm.reportValidity()) {
         return;
     }
@@ -798,11 +1146,26 @@ async function generateReport(event) {
     }
 }
 
+function handleReportOutputClick(event) {
+    const analyzeButton = event.target.closest("[data-analyze-collection-id]");
+    if (!analyzeButton) {
+        return;
+    }
+
+    event.preventDefault();
+    analyzeSelectedCollection(analyzeButton.dataset.analyzeCollectionId || "");
+}
+
 reportTypeField.addEventListener("change", syncTargetRequirement);
 downloadButton.addEventListener("click", downloadCurrentReport);
 explorerButton.addEventListener("click", runSelectedExplorer);
 dtmMonitorsButton.addEventListener("click", testDtmMonitors);
 dtmAlertsButton.addEventListener("click", testDtmAlerts);
+intelligenceSearchButton.addEventListener("click", searchGtiIntelligence);
+intelligencePresetButtons.forEach((button) => {
+    button.addEventListener("click", applyIntelligenceQueryPreset);
+});
+reportOutput.addEventListener("click", handleReportOutputClick);
 reportForm.addEventListener("submit", generateReport);
 setDownloadState(false);
 syncTargetRequirement();

@@ -184,6 +184,49 @@ body::before {
     color: var(--text-main);
 }
 
+.workflow-note {
+    margin: 0;
+    padding: 14px 16px;
+    border: 1px solid rgba(13, 127, 122, 0.16);
+    border-radius: var(--radius-sm);
+    background: rgba(13, 127, 122, 0.08);
+    color: var(--accent-strong);
+    font-size: 0.92rem;
+    font-weight: 700;
+    line-height: 1.6;
+}
+
+.field-note {
+    margin: 0;
+    color: var(--text-soft);
+    font-size: 0.88rem;
+    line-height: 1.6;
+}
+
+.preset-chip-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.preset-chip {
+    padding: 10px 14px;
+    border: 1px solid rgba(13, 127, 122, 0.16);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    color: var(--accent-strong);
+    font-size: 0.88rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.preset-chip:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 12px 24px rgba(9, 95, 99, 0.1);
+    background: rgba(240, 249, 249, 0.96);
+}
+
 .config-group {
     margin: 0;
     padding: 16px;
@@ -320,6 +363,34 @@ select:focus {
     width: 100%;
 }
 
+#intelligence-search-actions .secondary-button {
+    width: 100%;
+}
+
+.checkbox-field {
+    align-content: start;
+}
+
+.checkbox-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 52px;
+    padding: 14px 16px;
+    border: 1px solid rgba(16, 35, 45, 0.1);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.9);
+    font-weight: 700;
+    color: var(--text-main);
+}
+
+.checkbox-option input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: var(--accent);
+}
+
 .message-banner {
     margin-bottom: 18px;
     padding: 12px 14px;
@@ -402,6 +473,86 @@ select:focus {
 .report-output ul {
     margin: 0;
     padding-left: 22px;
+}
+
+.preview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 14px;
+}
+
+.preview-card {
+    padding: 16px;
+    border: 1px solid rgba(16, 35, 45, 0.08);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.9);
+}
+
+.preview-card-actions {
+    margin-top: 16px;
+}
+
+.inline-action-button {
+    width: 100%;
+    padding: 12px 14px;
+    font-size: 0.9rem;
+}
+
+.selected-action-button {
+    border-color: rgba(13, 127, 122, 0.32);
+    background: rgba(232, 247, 246, 0.96);
+}
+
+.preview-row {
+    display: grid;
+    gap: 4px;
+    margin-bottom: 12px;
+}
+
+.preview-row:last-child {
+    margin-bottom: 0;
+}
+
+.preview-label {
+    font-size: 0.76rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+}
+
+.preview-value {
+    line-height: 1.6;
+}
+
+.analysis-panel {
+    margin-top: 24px;
+    padding: 20px;
+    border: 1px solid rgba(16, 35, 45, 0.08);
+    border-radius: var(--radius-md);
+    background: rgba(247, 251, 251, 0.94);
+}
+
+.analysis-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 14px;
+}
+
+.score-callout {
+    margin: 18px 0;
+    padding: 14px 16px;
+    border: 1px solid rgba(13, 127, 122, 0.14);
+    border-radius: var(--radius-sm);
+    background: rgba(13, 127, 122, 0.08);
+}
+
+.score-callout p {
+    margin: 0;
+}
+
+.score-callout p + p {
+    margin-top: 8px;
 }
 
 .report-output details {
