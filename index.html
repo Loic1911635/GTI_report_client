@@ -49,6 +49,7 @@
                             <option value="Industry Snapshot Explorer">Industry Snapshot Explorer</option>
                             <option value="Company Exposure / DTM">Company Exposure / DTM</option>
                             <option value="GTI Intelligence Search">GTI Intelligence Search</option>
+                            <option value="Top Targets Ranking">Top Targets Ranking</option>
                         </select>
                     </label>
 
@@ -136,6 +137,66 @@
                                     <span>Request descriptors only</span>
                                 </label>
                             </div>
+                        </div>
+                    </div>
+
+                    <div id="top-targets-fields" class="report-form" hidden>
+                        <p class="workflow-note">
+                            Aggregates the most attacked industries and companies by scanning GTI
+                            collections from the selected period. Industries are extracted directly
+                            from collection metadata; company data comes from collection aggregations.
+                        </p>
+
+                        <div class="field-row">
+                            <label class="field">
+                                <span>Start Year</span>
+                                <input
+                                    id="top_targets_start_year"
+                                    name="top_targets_start_year"
+                                    type="number"
+                                    value="2024"
+                                    min="2018"
+                                    max="2100"
+                                >
+                            </label>
+
+                            <label class="field">
+                                <span>End Year <small>(optional, same year = single year)</small></span>
+                                <input
+                                    id="top_targets_end_year"
+                                    name="top_targets_end_year"
+                                    type="number"
+                                    placeholder="Leave blank for single year"
+                                    min="2018"
+                                    max="2100"
+                                >
+                            </label>
+                        </div>
+
+                        <div class="field-row">
+                            <label class="field">
+                                <span>Top N results</span>
+                                <input
+                                    id="top_targets_top_n"
+                                    name="top_targets_top_n"
+                                    type="number"
+                                    value="10"
+                                    min="1"
+                                    max="50"
+                                >
+                            </label>
+
+                            <label class="field">
+                                <span>Search pages <small>(×40 collections each)</small></span>
+                                <input
+                                    id="top_targets_max_pages"
+                                    name="top_targets_max_pages"
+                                    type="number"
+                                    value="3"
+                                    min="1"
+                                    max="5"
+                                >
+                            </label>
                         </div>
                     </div>
 
@@ -305,6 +366,16 @@
                             class="generate-button secondary-button"
                         >
                             Search GTI
+                        </button>
+                    </div>
+
+                    <div id="top-targets-actions" class="form-actions" hidden>
+                        <button
+                            id="top-targets-button"
+                            type="button"
+                            class="generate-button secondary-button"
+                        >
+                            Run Ranking
                         </button>
                     </div>
                 </form>

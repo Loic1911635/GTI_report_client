@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from backend.gti_client import (
     GTIClientError,
     MockGTIClient,
+    aggregate_top_targets,
     explore_industry_snapshots,
     get_collection_details,
     intelligence_search,
@@ -102,6 +103,28 @@ class CollectionDetailsRequest(BaseModel):
 
     api_key: str = Field(..., description="GTI or VirusTotal API key.")
     collection_id: str = Field(..., description="GTI collection identifier.")
+
+
+class TopTargetsRequest(BaseModel):
+    """Input payload for the Top Targets Ranking workflow."""
+
+    api_key: str = Field(..., description="GTI or VirusTotal API key.")
+    start_year: int = Field(default=2024, ge=2018, description="Start year of the analysis period.")
+    end_year: int | None = Field(default=None, description="End year (inclusive). Defaults to start_year.")
+    top_n: int = Field(default=10, ge=1, le=50, description="Number of top results to return.")
+    max_pages: int = Field(default=3, ge=1, le=5, description="Max GTI search pages to fetch (each = 40 results).")
+
+
+class TopTargetsResponse(BaseModel):
+    """Response payload returned by the Top Targets Ranking workflow."""
+
+    status: str
+    period: str
+    collections_analyzed: int
+    top_industries: list[dict[str, Any]]
+    top_companies: list[dict[str, Any]]
+    query_used: str
+    methodology: str
 
 
 class IndustrySnapshotExplorerResponse(BaseModel):
@@ -442,6 +465,38 @@ def analyze_collection_workflow(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except GTIClientError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/explore/top-targets", response_model=TopTargetsResponse)
+def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsResponse:
+    """Aggregate top targeted industries and companies from GTI collections."""
+
+    try:
+        result = aggregate_top_targets(
+            api_key=request.api_key,
+            start_year=request.start_year,
+            end_year=request.end_year,
+            top_n=request.top_n,
+            max_pages=request.max_pages,
+        )
+        return TopTargetsResponse(
+            status="success",
+            period=str(result["period"]),
+            collections_analyzed=int(result["collections_analyzed"]),
+            top_industries=result["top_industries"],
+            top_companies=result["top_companies"],
+            query_used=str(result["query_used"]),
+            methodology=str(result["methodology"]),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GTIClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Top targets ranking failed: {exc}",
+        ) from exc
 
 
 @app.post("/explore/countries-industries")

@@ -621,6 +621,86 @@ select:focus {
     color: var(--text-main);
 }
 
+/* ── Top Targets Ranking ──────────────────────────────── */
+
+.ranking-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 24px;
+    font-size: 0.92rem;
+}
+
+.ranking-table thead th {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 2px solid var(--accent);
+    color: var(--accent);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.ranking-row {
+    border-bottom: 1px solid rgba(13, 127, 122, 0.12);
+    transition: background 0.15s ease;
+}
+
+.ranking-row:hover {
+    background: rgba(13, 127, 122, 0.05);
+}
+
+.rank-cell {
+    padding: 10px 10px;
+    font-weight: 700;
+    color: var(--accent);
+    width: 36px;
+    text-align: center;
+}
+
+.name-cell {
+    padding: 10px 12px;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.bar-cell {
+    padding: 10px 12px;
+    width: 40%;
+}
+
+.ranking-bar-wrap {
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(13, 127, 122, 0.12);
+    overflow: hidden;
+}
+
+.ranking-bar {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), var(--signal));
+    min-width: 4px;
+    transition: width 0.4s ease;
+}
+
+.count-cell {
+    padding: 10px 10px;
+    font-size: 0.85rem;
+    color: var(--text-muted, #6b8a95);
+    white-space: nowrap;
+}
+
+.methodology-note {
+    margin-top: 20px;
+    padding: 12px 16px;
+    border-left: 3px solid var(--accent);
+    background: rgba(13, 127, 122, 0.06);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    font-size: 0.85rem;
+    color: var(--text-main);
+    line-height: 1.6;
+}
+
 @media (max-width: 960px) {
     .dashboard-grid {
         grid-template-columns: 1fr;

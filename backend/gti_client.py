@@ -268,6 +268,159 @@ def get_collection_details(
     }
 
 
+def aggregate_top_targets(
+    api_key: str,
+    start_year: int = 2024,
+    end_year: int | None = None,
+    top_n: int = 10,
+    max_pages: int = 3,
+) -> dict[str, Any]:
+    """Aggregate top targeted industries and companies from GTI Intelligence Search.
+
+    Strategy:
+    - Search GTI for collections created in the given year range
+    - Extract targeted_industries directly from each search result (no extra API calls)
+    - Fetch collection details for a subset to extract company/org aggregations
+    - Return ranked lists for both industries and companies
+    """
+
+    normalized_api_key = api_key.strip()
+    if not normalized_api_key:
+        raise ValueError("A GTI/VirusTotal API key is required for top targets analysis.")
+
+    effective_end_year = end_year if end_year else start_year
+    if effective_end_year < start_year:
+        raise ValueError("end_year must be >= start_year.")
+
+    date_query = (
+        f"creation_date:{start_year}-01-01+..{effective_end_year}-12-31+"
+        if effective_end_year != start_year
+        else f"creation_date:{start_year}-01-01+"
+    )
+    query = f"entity:collection {date_query}"
+
+    industry_counter: dict[str, int] = {}
+    company_counter: dict[str, int] = {}
+    collections_analyzed: list[dict[str, Any]] = []
+    cursor: str | None = None
+
+    for _ in range(max_pages):
+        try:
+            search_result = intelligence_search(
+                api_key=normalized_api_key,
+                query=query,
+                limit=MAX_INTELLIGENCE_SEARCH_LIMIT,
+                cursor=cursor,
+            )
+        except GTIClientError:
+            break
+
+        items = search_result.get("simplified_preview", [])
+        for item in items:
+            # Industries — available directly in the search preview
+            for name in _extract_names_from_field(item.get("targeted_industries")):
+                industry_counter[name] = industry_counter.get(name, 0) + 1
+            # Organizations — may also be in the search preview (varies by GTI plan/collection type)
+            for name in _extract_names_from_field(item.get("targeted_organizations")):
+                company_counter[name] = company_counter.get(name, 0) + 1
+            coll_id = _stringify_value(item.get("id")) or ""
+            if coll_id:
+                collections_analyzed.append({
+                    "id": coll_id,
+                    "name": _stringify_value(item.get("name") or item.get("title")) or "",
+                    "collection_type": _stringify_value(item.get("collection_type")) or "",
+                })
+
+        cursor = search_result.get("next_cursor")
+        if not cursor or not items:
+            break
+
+    # Phase 2: fetch collection details for a subset to find company data in aggregations.
+    # GTI uses many different field names depending on collection type, so we probe all of them.
+    _ORG_AGGREGATION_KEYS = (
+        "organizations", "victims", "victim_organizations",
+        "affected_organizations", "companies", "targeted_organizations",
+    )
+    details_limit = min(15, len(collections_analyzed))
+    for coll in collections_analyzed[:details_limit]:
+        try:
+            details = get_collection_details(normalized_api_key, coll["id"])
+            analysis = details.get("analysis", {})
+
+            # Check targeted_organizations extracted at attribute level
+            for name in _extract_names_from_field(analysis.get("targeted_organizations")):
+                company_counter[name] = company_counter.get(name, 0) + 1
+
+            # Check every known org-related key inside aggregations
+            aggregations = analysis.get("aggregations") or {}
+            if isinstance(aggregations, dict):
+                for agg_key in _ORG_AGGREGATION_KEYS:
+                    for org in (aggregations.get(agg_key) or []):
+                        org_name = _stringify_value(
+                            org.get("name") if isinstance(org, dict) else org
+                        )
+                        if org_name and org_name.strip():
+                            company_counter[org_name.strip()] = company_counter.get(org_name.strip(), 0) + 1
+        except (GTIClientError, Exception):
+            continue
+
+    period_label = (
+        f"{start_year}–{effective_end_year}"
+        if effective_end_year != start_year
+        else str(start_year)
+    )
+
+    ranked_industries = sorted(
+        industry_counter.items(), key=lambda x: x[1], reverse=True
+    )[:top_n]
+    ranked_companies = sorted(
+        company_counter.items(), key=lambda x: x[1], reverse=True
+    )[:top_n]
+
+    return {
+        "period": period_label,
+        "start_year": start_year,
+        "end_year": effective_end_year,
+        "top_n": top_n,
+        "collections_analyzed": len(collections_analyzed),
+        "top_industries": [
+            {"rank": i + 1, "name": name, "report_count": count}
+            for i, (name, count) in enumerate(ranked_industries)
+        ],
+        "top_companies": [
+            {"rank": i + 1, "name": name, "report_count": count}
+            for i, (name, count) in enumerate(ranked_companies)
+        ],
+        "query_used": query,
+        "methodology": (
+            f"Analyzed {len(collections_analyzed)} GTI collections from {period_label}. "
+            f"Industries: aggregated from targeted_industries fields in search results. "
+            f"Companies: aggregated from collection aggregations (first {details_limit} collections)."
+        ),
+    }
+
+
+def _extract_names_from_field(field: Any) -> list[str]:
+    """Extract string names from a GTI API field that may be a list, dict, or string."""
+
+    if field is None:
+        return []
+    if isinstance(field, str):
+        stripped = field.strip()
+        return [stripped] if stripped else []
+    if isinstance(field, list):
+        names: list[str] = []
+        for item in field:
+            names.extend(_extract_names_from_field(item))
+        return names
+    if isinstance(field, dict):
+        for key in ("name", "label", "title", "value", "id"):
+            candidate = field.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return [candidate.strip()]
+    return []
+
+
 def list_dtm_monitors(
     api_key: str,
     primary_domain: str | None = None,
@@ -811,6 +964,15 @@ def _simplify_intelligence_search_item(item: dict[str, Any]) -> dict[str, Any]:
             "targeted_industries": _normalize_collection_field(
                 _extract_exact_field(item, normalized_attributes, "targeted_industries")
             ),
+            "targeted_organizations": _normalize_collection_field(
+                _first_present(normalized_attributes, (
+                    "targeted_organizations",
+                    "affected_organizations",
+                    "victim_organizations",
+                    "organizations",
+                    "victims",
+                ))
+            ),
             "targeted_regions": _normalize_collection_field(
                 _extract_exact_field(item, normalized_attributes, "targeted_regions")
             ),
@@ -868,6 +1030,15 @@ def _extract_collection_analyzer_fields(item: dict[str, Any]) -> dict[str, Any]:
         ),
         "targeted_industries": _normalize_collection_field(
             _extract_exact_field(item, normalized_attributes, "targeted_industries")
+        ),
+        "targeted_organizations": _normalize_collection_field(
+            _first_present(normalized_attributes, (
+                "targeted_organizations",
+                "affected_organizations",
+                "victim_organizations",
+                "organizations",
+                "victims",
+            ))
         ),
         "targeted_regions": _normalize_collection_field(
             _extract_exact_field(item, normalized_attributes, "targeted_regions")

@@ -33,11 +33,19 @@ const dtmMonitorsButton = document.getElementById("dtm-monitors-button");
 const dtmAlertsButton = document.getElementById("dtm-alerts-button");
 const intelligenceSearchActions = document.getElementById("intelligence-search-actions");
 const intelligenceSearchButton = document.getElementById("intelligence-search-button");
+const topTargetsFields = document.getElementById("top-targets-fields");
+const topTargetsActions = document.getElementById("top-targets-actions");
+const topTargetsButton = document.getElementById("top-targets-button");
+const topTargetsStartYearField = document.getElementById("top_targets_start_year");
+const topTargetsEndYearField = document.getElementById("top_targets_end_year");
+const topTargetsTopNField = document.getElementById("top_targets_top_n");
+const topTargetsMaxPagesField = document.getElementById("top_targets_max_pages");
 
 const IOC_ENRICHMENT = "IoC Enrichment";
 const INDUSTRY_SNAPSHOT_EXPLORER = "Industry Snapshot Explorer";
 const COMPANY_EXPOSURE_DTM = "Company Exposure / DTM";
 const GTI_INTELLIGENCE_SEARCH = "GTI Intelligence Search";
+const TOP_TARGETS_RANKING = "Top Targets Ranking";
 
 let lastGeneratedReport = "";
 let lastDownloadFilename = "";
@@ -213,6 +221,12 @@ function setIntelligenceSearchLoadingState(isLoading) {
     updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
 }
 
+function setTopTargetsLoadingState(isLoading) {
+    topTargetsButton.disabled = isLoading;
+    topTargetsButton.textContent = isLoading ? "Analyzing GTI collections..." : "Run Ranking";
+    updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
+}
+
 function getSelectedSections() {
     return Array.from(
         document.querySelectorAll('input[name="sections"]:checked'),
@@ -242,29 +256,34 @@ function syncTargetRequirement() {
     const isCompanyExposureDtm = reportTypeField.value === COMPANY_EXPOSURE_DTM;
     const isIocEnrichment = reportTypeField.value === IOC_ENRICHMENT;
     const isIntelligenceSearch = reportTypeField.value === GTI_INTELLIGENCE_SEARCH;
+    const isTopTargets = reportTypeField.value === TOP_TARGETS_RANKING;
+    const isSpecialMode = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch || isTopTargets;
 
-    scopeFields.hidden = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch;
-    reportSectionsGroup.hidden = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch;
-    outputFormatGroup.hidden = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch;
-    reportActions.hidden = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch;
+    scopeFields.hidden = isSpecialMode;
+    reportSectionsGroup.hidden = isSpecialMode;
+    outputFormatGroup.hidden = isSpecialMode;
+    reportActions.hidden = isSpecialMode;
     explorerActions.hidden = !isExplorerMode;
     intelligenceSearchFields.hidden = !isIntelligenceSearch;
     intelligenceSearchActions.hidden = !isIntelligenceSearch;
     companyDtmFields.hidden = !isCompanyExposureDtm;
     companyDtmActions.hidden = !isCompanyExposureDtm;
+    topTargetsFields.hidden = !isTopTargets;
+    topTargetsActions.hidden = !isTopTargets;
 
     targetField.required = (
         isIocEnrichment
         && !isExplorerMode
         && !isCompanyExposureDtm
         && !isIntelligenceSearch
+        && !isTopTargets
     );
     intelligenceQueryField.required = isIntelligenceSearch;
     targetField.placeholder = isIocEnrichment ? "example.com" : "Company, region, or industry";
     targetLabel.textContent = isIocEnrichment ? "Target Domain" : "Target (Optional)";
     explorerButton.textContent = getExplorerButtonLabel();
 
-    if (isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch) {
+    if (isSpecialMode) {
         lastGeneratedReport = "";
         setDownloadState(false);
     }
@@ -1046,6 +1065,131 @@ async function testDtmAlerts() {
     }
 }
 
+function renderRankingTable(items, countLabel) {
+    if (!Array.isArray(items) || items.length === 0) {
+        return "<p><em>No data returned — the API may not have returned targeted information for this period.</em></p>";
+    }
+
+    const maxCount = Math.max(...items.map((item) => item.report_count || 0), 1);
+
+    const rows = items.map((item) => {
+        const pct = Math.round(((item.report_count || 0) / maxCount) * 100);
+        return `
+            <tr class="ranking-row">
+                <td class="rank-cell">${escapeHtml(String(item.rank))}</td>
+                <td class="name-cell">${escapeHtml(String(item.name || "Unknown"))}</td>
+                <td class="bar-cell">
+                    <div class="ranking-bar-wrap">
+                        <div class="ranking-bar" style="width:${pct}%"></div>
+                    </div>
+                </td>
+                <td class="count-cell">${escapeHtml(String(item.report_count || 0))} ${escapeHtml(countLabel)}</td>
+            </tr>
+        `;
+    }).join("");
+
+    return `
+        <table class="ranking-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Name</th>
+                    <th>Frequency</th>
+                    <th>Count</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+function renderTopTargetsResult(responseData) {
+    const industriesHtml = renderRankingTable(responseData.top_industries, "reports");
+    const companiesHtml = renderRankingTable(responseData.top_companies, "reports");
+
+    reportOutput.classList.remove("empty-state");
+    reportOutput.innerHTML = `
+        <h1>Top Targets Ranking — ${escapeHtml(String(responseData.period || ""))}</h1>
+        <p>
+            <strong>Collections analyzed:</strong> ${escapeHtml(String(responseData.collections_analyzed || 0))} |
+            <strong>GTI query:</strong> <code>${escapeHtml(String(responseData.query_used || ""))}</code>
+        </p>
+
+        <h2>Top ${escapeHtml(String(responseData.top_industries?.length || 0))} Most Targeted Industries</h2>
+        ${industriesHtml}
+
+        <h2>Top ${escapeHtml(String(responseData.top_companies?.length || 0))} Most Targeted Companies / Organizations <small style="font-size:0.7em;opacity:0.6">(from collection aggregations)</small></h2>
+        ${companiesHtml}
+
+        <div class="methodology-note">
+            <strong>Methodology:</strong> ${escapeHtml(String(responseData.methodology || ""))}
+        </div>
+        ${renderRawJsonDetails(responseData)}
+    `;
+}
+
+async function runTopTargetsRanking() {
+    if (!reportForm.reportValidity()) {
+        return;
+    }
+
+    clearMessage();
+    setTopTargetsLoadingState(true);
+    setDownloadState(false);
+    lastGeneratedReport = "";
+
+    const startYear = Number(topTargetsStartYearField.value || 2024);
+    const endYearRaw = topTargetsEndYearField.value.trim();
+    const endYear = endYearRaw ? Number(endYearRaw) : null;
+    const topN = Number(topTargetsTopNField.value || 10);
+    const maxPages = Number(topTargetsMaxPagesField.value || 3);
+
+    try {
+        const response = await fetch("/explore/top-targets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                api_key: apiKeyField.value.trim(),
+                start_year: startYear,
+                end_year: endYear,
+                top_n: topN,
+                max_pages: maxPages,
+            }),
+        });
+
+        const responseData = await response.json();
+        if (!response.ok) {
+            throw new Error(responseData.detail || "The backend returned an error.");
+        }
+
+        renderTopTargetsResult(responseData);
+        rawJsonOutput.textContent = JSON.stringify(responseData, null, 2);
+
+        const industryCount = responseData.top_industries?.length || 0;
+        const companyCount = responseData.top_companies?.length || 0;
+        updateStatus("Success", "success");
+        showMessage(
+            `Ranking complete: ${industryCount} industries and ${companyCount} companies ranked from ${responseData.collections_analyzed} GTI collections (${responseData.period}).`,
+            "success",
+        );
+    } catch (error) {
+        reportOutput.classList.add("empty-state");
+        reportOutput.innerHTML = `
+            <h3>Top Targets Ranking failed</h3>
+            <p>${escapeHtml(error.message || "Unknown error.")}</p>
+        `;
+        rawJsonOutput.textContent = "No valid JSON payload was returned.";
+        updateStatus("Error", "error");
+        showMessage(error.message || "Top Targets Ranking failed.", "error");
+    } finally {
+        setTopTargetsLoadingState(false);
+
+        if (!statusPill.classList.contains("success") && !statusPill.classList.contains("error")) {
+            updateStatus("Idle", "idle");
+        }
+    }
+}
+
 async function generateReport(event) {
     event.preventDefault();
 
@@ -1063,6 +1207,11 @@ async function generateReport(event) {
 
     if (reportTypeField.value === GTI_INTELLIGENCE_SEARCH) {
         await searchGtiIntelligence();
+        return;
+    }
+
+    if (reportTypeField.value === TOP_TARGETS_RANKING) {
+        await runTopTargetsRanking();
         return;
     }
 
@@ -1162,6 +1311,7 @@ explorerButton.addEventListener("click", runSelectedExplorer);
 dtmMonitorsButton.addEventListener("click", testDtmMonitors);
 dtmAlertsButton.addEventListener("click", testDtmAlerts);
 intelligenceSearchButton.addEventListener("click", searchGtiIntelligence);
+topTargetsButton.addEventListener("click", runTopTargetsRanking);
 intelligencePresetButtons.forEach((button) => {
     button.addEventListener("click", applyIntelligenceQueryPreset);
 });
