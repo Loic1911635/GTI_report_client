@@ -24,6 +24,14 @@ MAX_INTELLIGENCE_SEARCH_LIMIT = 40
 DEFAULT_DTM_MONITOR_PAGE_SIZE = 50
 DEFAULT_DTM_ALERT_PAGE_SIZE = 25
 MAX_DTM_ALERT_PAGE_SIZE = 25
+TOP_TARGET_ORG_AGGREGATION_KEYS = (
+    "organizations",
+    "victims",
+    "victim_organizations",
+    "affected_organizations",
+    "companies",
+    "targeted_organizations",
+)
 
 
 class GTIClientError(RuntimeError):
@@ -288,94 +296,123 @@ def aggregate_top_targets(
     if not normalized_api_key:
         raise ValueError("A GTI/VirusTotal API key is required for top targets analysis.")
 
-    effective_end_year = end_year if end_year else start_year
+    effective_end_year = start_year if end_year is None else end_year
     if effective_end_year < start_year:
         raise ValueError("end_year must be >= start_year.")
 
-    date_query = (
-        f"creation_date:{start_year}-01-01+..{effective_end_year}-12-31+"
-        if effective_end_year != start_year
-        else f"creation_date:{start_year}-01-01+"
-    )
+    date_query = f"creation_date:{start_year}-01-01+..{effective_end_year}-12-31+"
     query = f"entity:collection {date_query}"
 
     industry_counter: dict[str, int] = {}
+    industry_display_names: dict[str, str] = {}
     company_counter: dict[str, int] = {}
+    company_display_names: dict[str, str] = {}
     collections_analyzed: list[dict[str, Any]] = []
+    collections_requiring_company_details: list[dict[str, Any]] = []
+    seen_collection_ids: set[str] = set()
     cursor: str | None = None
 
     for _ in range(max_pages):
-        try:
-            search_result = intelligence_search(
-                api_key=normalized_api_key,
-                query=query,
-                limit=MAX_INTELLIGENCE_SEARCH_LIMIT,
-                cursor=cursor,
-            )
-        except GTIClientError:
-            break
+        search_result = intelligence_search(
+            api_key=normalized_api_key,
+            query=query,
+            limit=MAX_INTELLIGENCE_SEARCH_LIMIT,
+            cursor=cursor,
+        )
+        _raise_for_non_200_top_targets_result(
+            search_result,
+            "intelligence search",
+        )
 
         items = search_result.get("simplified_preview", [])
         for item in items:
             # Industries — available directly in the search preview
-            for name in _extract_names_from_field(item.get("targeted_industries")):
-                industry_counter[name] = industry_counter.get(name, 0) + 1
             # Organizations — may also be in the search preview (varies by GTI plan/collection type)
-            for name in _extract_names_from_field(item.get("targeted_organizations")):
-                company_counter[name] = company_counter.get(name, 0) + 1
             coll_id = _stringify_value(item.get("id")) or ""
-            if coll_id:
-                collections_analyzed.append({
-                    "id": coll_id,
-                    "name": _stringify_value(item.get("name") or item.get("title")) or "",
-                    "collection_type": _stringify_value(item.get("collection_type")) or "",
-                })
+            if not coll_id or coll_id in seen_collection_ids:
+                continue
+
+            seen_collection_ids.add(coll_id)
+            preview_industries = _extract_names_from_field(item.get("targeted_industries"))
+            preview_companies = _extract_names_from_field(
+                item.get("targeted_organizations")
+            )
+            _count_distinct_collection_mentions(
+                industry_counter,
+                industry_display_names,
+                preview_industries,
+            )
+            _count_distinct_collection_mentions(
+                company_counter,
+                company_display_names,
+                preview_companies,
+            )
+
+            collection_metadata = {
+                "id": coll_id,
+                "name": _stringify_value(item.get("name") or item.get("title")) or "",
+                "collection_type": _stringify_value(item.get("collection_type")) or "",
+            }
+            collections_analyzed.append(collection_metadata)
+            if not preview_companies:
+                collections_requiring_company_details.append(collection_metadata)
 
         cursor = search_result.get("next_cursor")
         if not cursor or not items:
             break
 
-    # Phase 2: fetch collection details for a subset to find company data in aggregations.
-    # GTI uses many different field names depending on collection type, so we probe all of them.
-    _ORG_AGGREGATION_KEYS = (
-        "organizations", "victims", "victim_organizations",
-        "affected_organizations", "companies", "targeted_organizations",
-    )
-    details_limit = min(15, len(collections_analyzed))
-    for coll in collections_analyzed[:details_limit]:
+    # Phase 2: only use collection details when preview organization fields were absent.
+    # This keeps company counts conservative and avoids double-counting one collection.
+    company_detail_lookups_attempted = 0
+    company_detail_lookups_succeeded = 0
+    for coll in collections_requiring_company_details:
+        company_detail_lookups_attempted += 1
         try:
             details = get_collection_details(normalized_api_key, coll["id"])
-            analysis = details.get("analysis", {})
-
-            # Check targeted_organizations extracted at attribute level
-            for name in _extract_names_from_field(analysis.get("targeted_organizations")):
-                company_counter[name] = company_counter.get(name, 0) + 1
-
-            # Check every known org-related key inside aggregations
-            aggregations = analysis.get("aggregations") or {}
-            if isinstance(aggregations, dict):
-                for agg_key in _ORG_AGGREGATION_KEYS:
-                    for org in (aggregations.get(agg_key) or []):
-                        org_name = _stringify_value(
-                            org.get("name") if isinstance(org, dict) else org
-                        )
-                        if org_name and org_name.strip():
-                            company_counter[org_name.strip()] = company_counter.get(org_name.strip(), 0) + 1
-        except (GTIClientError, Exception):
+            _raise_for_non_200_top_targets_result(
+                details,
+                f"collection details lookup for '{coll['id']}'",
+            )
+            detail_company_names = _extract_company_names_from_analysis(
+                details.get("analysis", {})
+            )
+            _count_distinct_collection_mentions(
+                company_counter,
+                company_display_names,
+                detail_company_names,
+            )
+            company_detail_lookups_succeeded += 1
+        except GTIClientError:
             continue
 
     period_label = (
-        f"{start_year}–{effective_end_year}"
+        f"{start_year}-{effective_end_year}"
         if effective_end_year != start_year
         else str(start_year)
     )
 
-    ranked_industries = sorted(
-        industry_counter.items(), key=lambda x: x[1], reverse=True
-    )[:top_n]
-    ranked_companies = sorted(
-        company_counter.items(), key=lambda x: x[1], reverse=True
-    )[:top_n]
+    ranked_industries = _build_ranked_collection_results(
+        industry_counter,
+        industry_display_names,
+        top_n,
+    )
+    ranked_companies = _build_ranked_collection_results(
+        company_counter,
+        company_display_names,
+        top_n,
+    )
+
+    if company_detail_lookups_attempted:
+        company_methodology = (
+            "Companies: counted once per collection from preview organization fields, "
+            "with collection details used only when preview organization data was absent "
+            f"({company_detail_lookups_succeeded}/{company_detail_lookups_attempted} "
+            "successful detail lookups)."
+        )
+    else:
+        company_methodology = (
+            "Companies: counted once per collection from preview organization fields."
+        )
 
     return {
         "period": period_label,
@@ -383,19 +420,16 @@ def aggregate_top_targets(
         "end_year": effective_end_year,
         "top_n": top_n,
         "collections_analyzed": len(collections_analyzed),
-        "top_industries": [
-            {"rank": i + 1, "name": name, "report_count": count}
-            for i, (name, count) in enumerate(ranked_industries)
-        ],
-        "top_companies": [
-            {"rank": i + 1, "name": name, "report_count": count}
-            for i, (name, count) in enumerate(ranked_companies)
-        ],
+        "company_detail_lookups_attempted": company_detail_lookups_attempted,
+        "company_detail_lookups_succeeded": company_detail_lookups_succeeded,
+        "top_industries": ranked_industries,
+        "top_companies": ranked_companies,
         "query_used": query,
         "methodology": (
-            f"Analyzed {len(collections_analyzed)} GTI collections from {period_label}. "
-            f"Industries: aggregated from targeted_industries fields in search results. "
-            f"Companies: aggregated from collection aggregations (first {details_limit} collections)."
+            f"Analyzed {len(collections_analyzed)} distinct GTI collections from "
+            f"{period_label}. Each industry or company is counted at most once per "
+            "collection. Industries: counted from targeted_industries fields in "
+            f"search results. {company_methodology}"
         ),
     }
 
@@ -419,6 +453,115 @@ def _extract_names_from_field(field: Any) -> list[str]:
             if isinstance(candidate, str) and candidate.strip():
                 return [candidate.strip()]
     return []
+
+
+def _count_distinct_collection_mentions(
+    counter: dict[str, int],
+    display_names: dict[str, str],
+    raw_names: list[str],
+) -> None:
+    """Increment a ranking counter once per normalized name within one collection."""
+
+    seen_names: set[str] = set()
+
+    for raw_name in raw_names:
+        cleaned_name = _clean_rank_name(raw_name)
+        normalized_name = cleaned_name.casefold()
+        if not normalized_name or normalized_name in seen_names:
+            continue
+
+        seen_names.add(normalized_name)
+        display_names.setdefault(normalized_name, cleaned_name)
+        counter[normalized_name] = counter.get(normalized_name, 0) + 1
+
+
+def _clean_rank_name(raw_name: str) -> str:
+    """Normalize spacing while keeping a human-readable display label."""
+
+    return " ".join(raw_name.split()).strip()
+
+
+def _build_ranked_collection_results(
+    counter: dict[str, int],
+    display_names: dict[str, str],
+    top_n: int,
+) -> list[dict[str, Any]]:
+    """Return ranked collection counts with stable alphabetical tie-breaking."""
+
+    ranked_items = sorted(
+        counter.items(),
+        key=lambda item: (-item[1], display_names[item[0]].casefold()),
+    )[:top_n]
+
+    return [
+        {
+            "rank": index + 1,
+            "name": display_names[normalized_name],
+            "collection_count": count,
+            # Keep the legacy key while exposing the stricter metric name.
+            "report_count": count,
+        }
+        for index, (normalized_name, count) in enumerate(ranked_items)
+    ]
+
+
+def _extract_company_names_from_analysis(analysis: Any) -> list[str]:
+    """Collect organization names from analyzer fields and org aggregations."""
+
+    if not isinstance(analysis, dict):
+        return []
+
+    names = _extract_names_from_field(analysis.get("targeted_organizations"))
+    aggregations = analysis.get("aggregations") or {}
+    if isinstance(aggregations, dict):
+        for aggregation_key in TOP_TARGET_ORG_AGGREGATION_KEYS:
+            names.extend(_extract_names_from_field(aggregations.get(aggregation_key)))
+
+    return names
+
+
+def _raise_for_non_200_top_targets_result(
+    result: dict[str, Any],
+    operation: str,
+) -> None:
+    """Turn GTI non-200 responses into explicit ranking failures."""
+
+    status_code = _safe_int(
+        result.get("status_code", result.get("http_status")),
+        default=0,
+    )
+    if status_code in (0, 200):
+        return
+
+    payload = result.get("raw_data", result.get("raw_json"))
+    error_detail = _extract_api_error_detail(payload)
+    detail_suffix = f": {error_detail}" if error_detail else ""
+    raise GTIClientError(
+        f"VirusTotal {operation} failed with status {status_code}{detail_suffix}"
+    )
+
+
+def _extract_api_error_detail(payload: Any) -> str:
+    """Extract a short upstream API error message when one is present."""
+
+    if not isinstance(payload, dict):
+        return ""
+
+    error = payload.get("error")
+    if isinstance(error, dict):
+        for key in ("message", "code"):
+            value = error.get(key)
+            if value is not None:
+                return str(value).strip()
+    elif error:
+        return str(error).strip()
+
+    for key in ("message", "detail"):
+        value = payload.get(key)
+        if value is not None:
+            return str(value).strip()
+
+    return ""
 
 
 def list_dtm_monitors(

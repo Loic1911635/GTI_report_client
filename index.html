@@ -143,8 +143,10 @@
                     <div id="top-targets-fields" class="report-form" hidden>
                         <p class="workflow-note">
                             Aggregates the most attacked industries and companies by scanning GTI
-                            collections from the selected period. Industries are extracted directly
-                            from collection metadata; company data comes from collection aggregations.
+                            collections from the selected period. Each industry or company is counted
+                            at most once per collection. Industries come from collection metadata;
+                            company data falls back to collection details only when preview org fields
+                            are absent.
                         </p>
 
                         <div class="field-row">

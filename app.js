@@ -1070,10 +1070,14 @@ function renderRankingTable(items, countLabel) {
         return "<p><em>No data returned — the API may not have returned targeted information for this period.</em></p>";
     }
 
-    const maxCount = Math.max(...items.map((item) => item.report_count || 0), 1);
+    const maxCount = Math.max(
+        ...items.map((item) => item.collection_count ?? item.report_count ?? 0),
+        1,
+    );
 
     const rows = items.map((item) => {
-        const pct = Math.round(((item.report_count || 0) / maxCount) * 100);
+        const count = item.collection_count ?? item.report_count ?? 0;
+        const pct = Math.round((count / maxCount) * 100);
         return `
             <tr class="ranking-row">
                 <td class="rank-cell">${escapeHtml(String(item.rank))}</td>
@@ -1083,7 +1087,7 @@ function renderRankingTable(items, countLabel) {
                         <div class="ranking-bar" style="width:${pct}%"></div>
                     </div>
                 </td>
-                <td class="count-cell">${escapeHtml(String(item.report_count || 0))} ${escapeHtml(countLabel)}</td>
+                <td class="count-cell">${escapeHtml(String(count))} ${escapeHtml(countLabel)}</td>
             </tr>
         `;
     }).join("");
@@ -1104,8 +1108,18 @@ function renderRankingTable(items, countLabel) {
 }
 
 function renderTopTargetsResult(responseData) {
-    const industriesHtml = renderRankingTable(responseData.top_industries, "reports");
-    const companiesHtml = renderRankingTable(responseData.top_companies, "reports");
+    const industriesHtml = renderRankingTable(responseData.top_industries, "collections");
+    const companiesHtml = renderRankingTable(responseData.top_companies, "collections");
+    const detailLookupsAttempted = Number(responseData.company_detail_lookups_attempted || 0);
+    const detailLookupsSucceeded = Number(responseData.company_detail_lookups_succeeded || 0);
+    const detailLookupHtml = detailLookupsAttempted > 0
+        ? `
+        <p>
+            <strong>Company detail lookups:</strong>
+            ${escapeHtml(String(detailLookupsSucceeded))}/${escapeHtml(String(detailLookupsAttempted))} succeeded
+        </p>
+        `
+        : "";
 
     reportOutput.classList.remove("empty-state");
     reportOutput.innerHTML = `
@@ -1114,11 +1128,13 @@ function renderTopTargetsResult(responseData) {
             <strong>Collections analyzed:</strong> ${escapeHtml(String(responseData.collections_analyzed || 0))} |
             <strong>GTI query:</strong> <code>${escapeHtml(String(responseData.query_used || ""))}</code>
         </p>
+        <p><strong>Counting model:</strong> each industry or company is counted at most once per GTI collection.</p>
+        ${detailLookupHtml}
 
         <h2>Top ${escapeHtml(String(responseData.top_industries?.length || 0))} Most Targeted Industries</h2>
         ${industriesHtml}
 
-        <h2>Top ${escapeHtml(String(responseData.top_companies?.length || 0))} Most Targeted Companies / Organizations <small style="font-size:0.7em;opacity:0.6">(from collection aggregations)</small></h2>
+        <h2>Top ${escapeHtml(String(responseData.top_companies?.length || 0))} Most Targeted Companies / Organizations <small style="font-size:0.7em;opacity:0.6">(counted by distinct collections)</small></h2>
         ${companiesHtml}
 
         <div class="methodology-note">
@@ -1169,7 +1185,7 @@ async function runTopTargetsRanking() {
         const companyCount = responseData.top_companies?.length || 0;
         updateStatus("Success", "success");
         showMessage(
-            `Ranking complete: ${industryCount} industries and ${companyCount} companies ranked from ${responseData.collections_analyzed} GTI collections (${responseData.period}).`,
+            `Ranking complete: ${industryCount} industries and ${companyCount} companies ranked from ${responseData.collections_analyzed} distinct GTI collections (${responseData.period}).`,
             "success",
         );
     } catch (error) {

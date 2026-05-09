@@ -121,6 +121,8 @@ class TopTargetsResponse(BaseModel):
     status: str
     period: str
     collections_analyzed: int
+    company_detail_lookups_attempted: int
+    company_detail_lookups_succeeded: int
     top_industries: list[dict[str, Any]]
     top_companies: list[dict[str, Any]]
     query_used: str
@@ -483,6 +485,12 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             status="success",
             period=str(result["period"]),
             collections_analyzed=int(result["collections_analyzed"]),
+            company_detail_lookups_attempted=int(
+                result["company_detail_lookups_attempted"]
+            ),
+            company_detail_lookups_succeeded=int(
+                result["company_detail_lookups_succeeded"]
+            ),
             top_industries=result["top_industries"],
             top_companies=result["top_companies"],
             query_used=str(result["query_used"]),
