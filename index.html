@@ -86,7 +86,7 @@
                             <span>Limit</span>
                             <input id="intelligence_limit" name="intelligence_limit" type="number" value="10" min="1" max="40">
                         </label>
-                        <div class="field">
+                        <div class="field checkbox-field">
                             <span>Options</span>
                             <label class="checkbox-option" for="intelligence_descriptors_only">
                                 <input id="intelligence_descriptors_only" name="intelligence_descriptors_only" type="checkbox">
@@ -191,20 +191,20 @@
                 <!-- Action Buttons -->
                 <div class="form-block form-actions-block">
                     <div id="report-actions">
-                        <button id="generate-button" type="submit" class="btn btn-primary btn-full">Generate Report</button>
+                        <button id="generate-button" type="submit" class="generate-button btn-full">Generate Report</button>
                     </div>
                     <div id="explorer-actions" hidden>
-                        <button id="explorer-button" type="button" class="btn btn-primary btn-full">Run Explorer</button>
+                        <button id="explorer-button" type="button" class="generate-button btn-full">Run Explorer</button>
                     </div>
                     <div id="company-dtm-actions" class="dtm-actions" hidden>
-                        <button id="dtm-monitors-button" type="button" class="btn btn-secondary btn-full">Test DTM Monitors</button>
-                        <button id="dtm-alerts-button" type="button" class="btn btn-secondary btn-full">Test DTM Alerts</button>
+                        <button id="dtm-monitors-button" type="button" class="generate-button secondary-button btn-full">Test DTM Monitors</button>
+                        <button id="dtm-alerts-button" type="button" class="generate-button secondary-button btn-full">Test DTM Alerts</button>
                     </div>
                     <div id="intelligence-search-actions" hidden>
-                        <button id="intelligence-search-button" type="button" class="btn btn-primary btn-full">Search GTI</button>
+                        <button id="intelligence-search-button" type="button" class="generate-button secondary-button btn-full">Search GTI</button>
                     </div>
                     <div id="top-targets-actions" hidden>
-                        <button id="top-targets-button" type="button" class="btn btn-primary btn-full">Run Ranking</button>
+                        <button id="top-targets-button" type="button" class="generate-button secondary-button btn-full">Run Ranking</button>
                     </div>
                 </div>
 
@@ -222,7 +222,7 @@
                 <button
                     id="download-button"
                     type="button"
-                    class="btn btn-secondary"
+                    class="generate-button secondary-button"
                     hidden
                     disabled
                 >
@@ -245,7 +245,7 @@
             </div>
 
             <!-- Tab: Live Rankings -->
-            <div class="tab-panel hidden" id="tab-rankings" role="tabpanel">
+            <div class="tab-panel" id="tab-rankings" role="tabpanel" hidden>
                 <div class="rankings-panel">
                     <div class="stats-toolbar">
                         <label class="field">
@@ -276,7 +276,7 @@
             </div>
 
             <!-- Tab: Raw JSON -->
-            <div class="tab-panel hidden" id="tab-json" role="tabpanel">
+            <div class="tab-panel" id="tab-json" role="tabpanel" hidden>
                 <div class="json-panel">
                     <pre id="raw-json-output">No response yet.</pre>
                 </div>

@@ -301,7 +301,7 @@ def aggregate_top_targets(
     if effective_end_year < start_year:
         raise ValueError("end_year must be >= start_year.")
 
-    date_query = f"creation_date:{start_year}-01-01+..{effective_end_year}-12-31+"
+    date_query = f"creation_date:{start_year}-01-01+ creation_date:{effective_end_year}-12-31-"
     query = f"entity:collection {date_query}"
 
     industry_counter: dict[str, int] = {}
@@ -1416,7 +1416,7 @@ def get_top_industries(
         raise ValueError("A GTI/VirusTotal API key is required for industry ranking.")
 
     normalized_target = target.strip() if target else None
-    date_filter = f"creation_date:{year}-01-01+..{year}-12-31+"
+    date_filter = f"creation_date:{year}-01-01+ creation_date:{year}-12-31-"
     query = (
         f"entity:collection {normalized_target} {date_filter}"
         if normalized_target
@@ -1568,7 +1568,7 @@ def _fetch_companies_from_search(
 ) -> list[dict[str, Any]] | None:
     """Extract organizations from GTI Intelligence Search preview fields. Returns None if empty."""
 
-    date_filter = f"creation_date:{year}-01-01+..{year}-12-31+"
+    date_filter = f"creation_date:{year}-01-01+ creation_date:{year}-12-31-"
     query = (
         f"entity:collection {target} {date_filter}"
         if target

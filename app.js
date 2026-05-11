@@ -1486,7 +1486,8 @@ const tabPanels = document.querySelectorAll(".tab-panel");
 
 function switchToTab(tabId) {
     tabBtns.forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === tabId));
-    tabPanels.forEach((panel) => panel.classList.toggle("hidden", panel.id !== `tab-${tabId}`));
+    tabPanels.forEach((panel) => { panel.hidden = panel.id !== `tab-${tabId}`; });
 }
 
 tabBtns.forEach((btn) => btn.addEventListener("click", () => switchToTab(btn.dataset.tab)));
+
