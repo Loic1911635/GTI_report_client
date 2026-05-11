@@ -701,6 +701,68 @@ select:focus {
     line-height: 1.6;
 }
 
+/* ── Live Rankings stats panel ──────────────────────── */
+
+.panel-stats {
+    padding: 24px;
+    margin-top: 24px;
+}
+
+.stats-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-bottom: 20px;
+    align-items: flex-end;
+}
+
+.stats-toolbar .field {
+    flex: 0 0 140px;
+}
+
+.stats-target-field {
+    flex: 1 1 220px !important;
+}
+
+.stats-charts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 20px;
+}
+
+.stats-chart-panel {
+    min-width: 0;
+}
+
+.stats-chart-title {
+    margin: 0 0 12px;
+    font-size: 1rem;
+    font-family: "Franklin Gothic Medium", "Arial Narrow", sans-serif;
+    color: var(--accent-strong);
+}
+
+.chart-area {
+    min-height: 80px;
+}
+
+.source-badge-area {
+    margin-top: 10px;
+    display: flex;
+    gap: 8px;
+}
+
+.source-badge {
+    font-size: 0.75rem !important;
+    padding: 4px 10px !important;
+    opacity: 0.75;
+}
+
+.stats-error {
+    color: var(--alert);
+    font-size: 0.9rem;
+    font-style: italic;
+}
+
 @media (max-width: 960px) {
     .dashboard-grid {
         grid-template-columns: 1fr;

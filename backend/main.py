@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -15,6 +16,8 @@ from backend.gti_client import (
     aggregate_top_targets,
     explore_industry_snapshots,
     get_collection_details,
+    get_top_companies,
+    get_top_industries,
     intelligence_search,
     list_dtm_alerts,
     list_dtm_monitors,
@@ -31,6 +34,21 @@ from backend.report_generator import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+_CACHE_TTL = 300  # seconds
+_api_cache: dict[str, tuple[float, Any]] = {}
+
+
+def _cache_get(key: str) -> Any | None:
+    entry = _api_cache.get(key)
+    if entry and time.time() - entry[0] < _CACHE_TTL:
+        return entry[1]
+    _api_cache.pop(key, None)
+    return None
+
+
+def _cache_set(key: str, value: Any) -> None:
+    _api_cache[key] = (time.time(), value)
 INDEX_FILE = PROJECT_ROOT / "index.html"
 APP_JS_FILE = PROJECT_ROOT / "app.js"
 STYLE_CSS_FILE = PROJECT_ROOT / "style.css"
@@ -504,6 +522,68 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
         raise HTTPException(
             status_code=500,
             detail=f"Top targets ranking failed: {exc}",
+        ) from exc
+
+
+@app.get("/api/industries")
+def api_industries(
+    year: int = Query(default=2024, ge=2018, le=2100),
+    top: int = Query(default=10, ge=1, le=50),
+    target: str | None = Query(default=None),
+    x_api_key: str = Header(default=""),
+) -> dict[str, Any]:
+    """Return the top N most targeted industries for the given year."""
+
+    if not x_api_key.strip():
+        raise HTTPException(status_code=401, detail="x-api-key header is required.")
+
+    cache_key = f"industries:{year}:{top}:{(target or '').strip().casefold()}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        result = get_top_industries(api_key=x_api_key, year=year, top_n=top, target=target)
+        _cache_set(cache_key, result)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GTIClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Industry ranking failed: {exc}"
+        ) from exc
+
+
+@app.get("/api/companies")
+def api_companies(
+    year: int = Query(default=2024, ge=2018, le=2100),
+    top: int = Query(default=10, ge=1, le=50),
+    target: str | None = Query(default=None),
+    x_api_key: str = Header(default=""),
+) -> dict[str, Any]:
+    """Return the top N most targeted companies/organizations for the given year."""
+
+    if not x_api_key.strip():
+        raise HTTPException(status_code=401, detail="x-api-key header is required.")
+
+    cache_key = f"companies:{year}:{top}:{(target or '').strip().casefold()}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        result = get_top_companies(api_key=x_api_key, year=year, top_n=top, target=target)
+        _cache_set(cache_key, result)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GTIClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Company ranking failed: {exc}"
         ) from exc
 
 

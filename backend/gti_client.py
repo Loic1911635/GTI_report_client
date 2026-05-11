@@ -18,6 +18,7 @@ VIRUSTOTAL_INTELLIGENCE_SEARCH_URL = (
 )
 VIRUSTOTAL_DTM_MONITORS_URL = "https://www.virustotal.com/api/v3/dtm/monitors"
 VIRUSTOTAL_DTM_ALERTS_URL = "https://www.virustotal.com/api/v3/dtm/alerts"
+VIRUSTOTAL_DTM_EVENTS_URL = "https://www.virustotal.com/api/v3/dtm/events"
 MAX_SAFE_DTM_PAGES = 5
 DEFAULT_INTELLIGENCE_SEARCH_LIMIT = 10
 MAX_INTELLIGENCE_SEARCH_LIMIT = 40
@@ -1399,6 +1400,217 @@ def _stringify_value(value: Any) -> str | None:
         return None
 
     return str(value)
+
+
+def get_top_industries(
+    api_key: str,
+    year: int = 2024,
+    top_n: int = 10,
+    target: str | None = None,
+    max_pages: int = 3,
+) -> dict[str, Any]:
+    """Aggregate top targeted industries for a year via GTI Intelligence Search."""
+
+    normalized_api_key = api_key.strip()
+    if not normalized_api_key:
+        raise ValueError("A GTI/VirusTotal API key is required for industry ranking.")
+
+    normalized_target = target.strip() if target else None
+    date_filter = f"creation_date:{year}-01-01+..{year}-12-31+"
+    query = (
+        f"entity:collection {normalized_target} {date_filter}"
+        if normalized_target
+        else f"entity:collection {date_filter}"
+    )
+
+    industry_counter: dict[str, int] = {}
+    industry_display_names: dict[str, str] = {}
+    seen_collection_ids: set[str] = set()
+    cursor: str | None = None
+
+    for _ in range(max_pages):
+        search_result = intelligence_search(
+            api_key=normalized_api_key,
+            query=query,
+            limit=MAX_INTELLIGENCE_SEARCH_LIMIT,
+            cursor=cursor,
+        )
+        if _safe_int(search_result.get("status_code")) not in (0, 200):
+            break
+
+        items = search_result.get("simplified_preview", [])
+        for item in items:
+            coll_id = _stringify_value(item.get("id")) or ""
+            if not coll_id or coll_id in seen_collection_ids:
+                continue
+            seen_collection_ids.add(coll_id)
+            _count_distinct_collection_mentions(
+                industry_counter,
+                industry_display_names,
+                _extract_names_from_field(item.get("targeted_industries")),
+            )
+
+        cursor = search_result.get("next_cursor")
+        if not cursor or not items:
+            break
+
+    return {
+        "year": year,
+        "source": "search",
+        "data": _build_ranked_collection_results(
+            industry_counter, industry_display_names, top_n
+        ),
+    }
+
+
+def get_top_companies(
+    api_key: str,
+    year: int = 2024,
+    top_n: int = 10,
+    target: str | None = None,
+    max_pages: int = 3,
+) -> dict[str, Any]:
+    """Aggregate top targeted companies using DTM → Search → Actors fallback chain."""
+
+    normalized_api_key = api_key.strip()
+    if not normalized_api_key:
+        raise ValueError("A GTI/VirusTotal API key is required for company ranking.")
+
+    normalized_target = target.strip() if target else None
+
+    # Attempt 1: DTM events
+    try:
+        dtm_companies = _fetch_companies_from_dtm(normalized_api_key, normalized_target)
+        if dtm_companies is not None:
+            print(f"[companies] Source: DTM ({len(dtm_companies)} entries before slice)")
+            return {"year": year, "source": "dtm", "data": dtm_companies[:top_n]}
+    except Exception as exc:
+        print(f"[companies] DTM attempt skipped: {exc}")
+
+    # Attempt 2: Intelligence Search
+    try:
+        search_companies = _fetch_companies_from_search(
+            normalized_api_key, year, normalized_target, top_n, max_pages
+        )
+        if search_companies is not None:
+            print(f"[companies] Source: Search ({len(search_companies)} entries)")
+            return {"year": year, "source": "search", "data": search_companies}
+    except Exception as exc:
+        print(f"[companies] Search attempt skipped: {exc}")
+
+    # Attempt 3: Actors fallback — reuse aggregate_top_targets and extract companies
+    print("[companies] Source: Actors fallback")
+    fallback = aggregate_top_targets(
+        api_key=normalized_api_key,
+        start_year=year,
+        top_n=top_n,
+        max_pages=max_pages,
+    )
+    return {
+        "year": year,
+        "source": "actors",
+        "data": fallback.get("top_companies", []),
+    }
+
+
+def _fetch_companies_from_dtm(
+    api_key: str,
+    target: str | None,
+) -> list[dict[str, Any]] | None:
+    """Query DTM events endpoint for company names. Returns None on 403/404 or empty result."""
+
+    params: dict[str, Any] = {"limit": 40}
+    if target:
+        params["query"] = target
+
+    result = _probe_json_endpoint(
+        api_key=api_key,
+        url=VIRUSTOTAL_DTM_EVENTS_URL,
+        params=params,
+        endpoint_name="dtm_events",
+    )
+
+    status = int(result["http_status"])
+    if status in (403, 404):
+        print(f"[companies] DTM events HTTP {status} — plan insufficient, skipping.")
+        return None
+    if status != 200:
+        return None
+
+    items = _extract_api_items(result["raw_json"])
+    company_counter: dict[str, int] = {}
+    company_display: dict[str, str] = {}
+
+    for item in items:
+        raw_attributes = item.get("attributes")
+        attributes = raw_attributes if isinstance(raw_attributes, dict) else {}
+        for key in ("entity", "organization", "victim", "target_org", "company", "target"):
+            value = attributes.get(key) or item.get(key)
+            if value:
+                _count_distinct_collection_mentions(
+                    company_counter,
+                    company_display,
+                    _extract_names_from_field(value),
+                )
+
+    if not company_counter:
+        return None
+
+    return _build_ranked_collection_results(company_counter, company_display, 50)
+
+
+def _fetch_companies_from_search(
+    api_key: str,
+    year: int,
+    target: str | None,
+    top_n: int,
+    max_pages: int,
+) -> list[dict[str, Any]] | None:
+    """Extract organizations from GTI Intelligence Search preview fields. Returns None if empty."""
+
+    date_filter = f"creation_date:{year}-01-01+..{year}-12-31+"
+    query = (
+        f"entity:collection {target} {date_filter}"
+        if target
+        else f"entity:collection {date_filter}"
+    )
+
+    company_counter: dict[str, int] = {}
+    company_display: dict[str, str] = {}
+    seen_ids: set[str] = set()
+    cursor: str | None = None
+
+    for _ in range(max_pages):
+        search_result = intelligence_search(
+            api_key=api_key,
+            query=query,
+            limit=MAX_INTELLIGENCE_SEARCH_LIMIT,
+            cursor=cursor,
+        )
+        if _safe_int(search_result.get("status_code")) not in (0, 200):
+            return None
+
+        items = search_result.get("simplified_preview", [])
+        for item in items:
+            coll_id = _stringify_value(item.get("id")) or ""
+            if not coll_id or coll_id in seen_ids:
+                continue
+            seen_ids.add(coll_id)
+            for key in ("targeted_organizations", "victims", "organizations"):
+                _count_distinct_collection_mentions(
+                    company_counter,
+                    company_display,
+                    _extract_names_from_field(item.get(key)),
+                )
+
+        cursor = search_result.get("next_cursor")
+        if not cursor or not items:
+            break
+
+    if not company_counter:
+        return None
+
+    return _build_ranked_collection_results(company_counter, company_display, top_n)
 
 
 class MockGTIClient:

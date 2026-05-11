@@ -420,6 +420,52 @@
                 </details>
             </section>
         </main>
+
+        <section class="panel panel-stats" aria-labelledby="stats-title">
+            <div class="panel-heading">
+                <p class="panel-kicker">Live Rankings</p>
+                <h2 id="stats-title">Top Targeted Entities</h2>
+            </div>
+
+            <div class="stats-toolbar">
+                <label class="field">
+                    <span>Year</span>
+                    <input
+                        id="stats_year"
+                        name="stats_year"
+                        type="number"
+                        value="2024"
+                        min="2018"
+                        max="2100"
+                    >
+                </label>
+                <label class="field stats-target-field">
+                    <span>Filter by Target</span>
+                    <input
+                        id="stats_target"
+                        name="stats_target"
+                        type="text"
+                        placeholder="ex: finance, microsoft…"
+                    >
+                </label>
+            </div>
+
+            <div class="stats-charts-grid">
+                <div class="stats-chart-panel">
+                    <h3 class="stats-chart-title">Top 10 Industries</h3>
+                    <div id="industries-chart" class="chart-area">
+                        <p><em>Enter your API key above to load data.</em></p>
+                    </div>
+                </div>
+                <div class="stats-chart-panel">
+                    <h3 class="stats-chart-title">Top 10 Companies / Organizations</h3>
+                    <div id="companies-chart" class="chart-area">
+                        <p><em>Enter your API key above to load data.</em></p>
+                    </div>
+                    <div id="companies-source-badge" class="source-badge-area"></div>
+                </div>
+            </div>
+        </section>
     </div>
 
     <script src="/app.js"></script>

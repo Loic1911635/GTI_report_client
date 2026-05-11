@@ -40,6 +40,11 @@ const topTargetsStartYearField = document.getElementById("top_targets_start_year
 const topTargetsEndYearField = document.getElementById("top_targets_end_year");
 const topTargetsTopNField = document.getElementById("top_targets_top_n");
 const topTargetsMaxPagesField = document.getElementById("top_targets_max_pages");
+const statsYearField = document.getElementById("stats_year");
+const statsTargetField = document.getElementById("stats_target");
+const industriesChartEl = document.getElementById("industries-chart");
+const companiesChartEl = document.getElementById("companies-chart");
+const companiesSourceBadgeEl = document.getElementById("companies-source-badge");
 
 const IOC_ENRICHMENT = "IoC Enrichment";
 const INDUSTRY_SNAPSHOT_EXPLORER = "Industry Snapshot Explorer";
@@ -1335,3 +1340,75 @@ reportOutput.addEventListener("click", handleReportOutputClick);
 reportForm.addEventListener("submit", generateReport);
 setDownloadState(false);
 syncTargetRequirement();
+
+let statsDebounceTimer = null;
+
+async function fetchIndustries(year, target = "") {
+    const apiKey = apiKeyField.value.trim();
+    if (!apiKey) {
+        industriesChartEl.innerHTML = "<p><em>Enter your API key above to load data.</em></p>";
+        return;
+    }
+    industriesChartEl.innerHTML = "<p><em>Loading…</em></p>";
+
+    const params = new URLSearchParams({ year, top: 10 });
+    if (target) params.set("target", target);
+
+    try {
+        const response = await fetch(`/api/industries?${params}`, {
+            headers: { "x-api-key": apiKey },
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Failed to load industries.");
+        industriesChartEl.innerHTML = renderRankingTable(data.data || [], "collections");
+    } catch (err) {
+        industriesChartEl.innerHTML = `<p class="stats-error">${escapeHtml(err.message)}</p>`;
+    }
+}
+
+async function fetchCompanies(year, target = "") {
+    const apiKey = apiKeyField.value.trim();
+    if (!apiKey) {
+        companiesChartEl.innerHTML = "<p><em>Enter your API key above to load data.</em></p>";
+        companiesSourceBadgeEl.innerHTML = "";
+        return;
+    }
+    companiesChartEl.innerHTML = "<p><em>Loading…</em></p>";
+    companiesSourceBadgeEl.innerHTML = "";
+
+    const params = new URLSearchParams({ year, top: 10 });
+    if (target) params.set("target", target);
+
+    try {
+        const response = await fetch(`/api/companies?${params}`, {
+            headers: { "x-api-key": apiKey },
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Failed to load companies.");
+        companiesChartEl.innerHTML = renderRankingTable(data.data || [], "collections");
+        const sourceLabels = { dtm: "via DTM", search: "via Search", actors: "via Actors" };
+        const sourceLabel = sourceLabels[data.source] || data.source || "";
+        if (sourceLabel) {
+            companiesSourceBadgeEl.innerHTML = `<span class="badge source-badge">${escapeHtml(sourceLabel)}</span>`;
+        }
+    } catch (err) {
+        companiesChartEl.innerHTML = `<p class="stats-error">${escapeHtml(err.message)}</p>`;
+    }
+}
+
+function refreshStats() {
+    const year = Number(statsYearField.value || 2024);
+    const target = statsTargetField.value.trim();
+    fetchIndustries(year, target);
+    fetchCompanies(year, target);
+}
+
+function onStatsInputChange() {
+    clearTimeout(statsDebounceTimer);
+    statsDebounceTimer = setTimeout(refreshStats, 400);
+}
+
+statsYearField.addEventListener("change", onStatsInputChange);
+statsTargetField.addEventListener("input", onStatsInputChange);
+apiKeyField.addEventListener("change", refreshStats);
+refreshStats();
