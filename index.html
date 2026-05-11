@@ -7,30 +7,24 @@
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <div class="dashboard-shell">
-        <header class="topbar">
-            <div>
-                <p class="eyebrow">SOC / Threat Intelligence</p>
-                <h1>GTI Report Generator</h1>
-                <p class="subtitle">
-                    Generate a fast analyst-style report from the GTI backend MVP.
-                </p>
-            </div>
-            <div class="topbar-badges" aria-label="Status badges">
-                <span class="badge badge-live">MVP</span>
-                <span class="badge">FastAPI</span>
-                <span class="badge">Markdown Output</span>
-            </div>
-        </header>
+    <div class="app-shell">
 
-        <main class="dashboard-grid">
-            <section class="panel panel-form" aria-labelledby="form-title">
-                <div class="panel-heading">
-                    <p class="panel-kicker">Input Console</p>
-                    <h2 id="form-title">Report Parameters</h2>
+        <!-- ── Sidebar ──────────────────────────────────────── -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div>
+                    <p class="eyebrow">SOC / Threat Intel</p>
+                    <h1 class="app-title">GTI Report</h1>
                 </div>
+                <div class="header-badges">
+                    <span class="badge badge-live">MVP</span>
+                    <span class="badge">FastAPI</span>
+                </div>
+            </div>
 
-                <form id="report-form" class="report-form">
+            <form id="report-form" class="sidebar-form">
+
+                <div class="form-block">
                     <label class="field">
                         <span>GTI API Key</span>
                         <input
@@ -41,7 +35,11 @@
                             required
                         >
                     </label>
+                </div>
 
+                <div class="form-sep"></div>
+
+                <div class="form-block">
                     <label class="field">
                         <span>Report Type</span>
                         <select id="report_type" name="report_type" required>
@@ -52,420 +50,239 @@
                             <option value="Top Targets Ranking">Top Targets Ranking</option>
                         </select>
                     </label>
+                    <div class="mode-card" id="mode-card">
+                        <div class="mode-card-label" id="mode-card-label">IoC Enrichment</div>
+                        <p class="mode-card-text" id="mode-card-text">Generates a structured analyst report from GTI data on a target domain.</p>
+                    </div>
+                </div>
 
-                    <div id="intelligence-search-fields" class="report-form" hidden>
-                        <p class="workflow-note">
-                            This module explores GTI data availability before building aggregated reports.
-                        </p>
+                <div class="form-sep"></div>
 
+                <!-- Intelligence Search fields -->
+                <div id="intelligence-search-fields" class="form-block" hidden>
+                    <label class="field">
+                        <span>Search Query</span>
+                        <input
+                            id="intelligence_query"
+                            name="intelligence_query"
+                            type="text"
+                            value='entity:collection "Belgian airport"'
+                            placeholder='entity:collection "Industry Snapshot"'
+                        >
+                    </label>
+                    <div class="field">
+                        <span>Preset Queries</span>
+                        <div class="preset-chip-grid">
+                            <button type="button" class="preset-chip" data-intelligence-query='entity:collection "Industry Snapshot"'>Industry Snapshot</button>
+                            <button type="button" class="preset-chip" data-intelligence-query='entity:collection "Aerospace &amp; Defense"'>Aerospace &amp; Defense</button>
+                            <button type="button" class="preset-chip" data-intelligence-query="entity:collection Transportation">Transportation</button>
+                            <button type="button" class="preset-chip" data-intelligence-query="entity:collection Belgium">Belgium</button>
+                            <button type="button" class="preset-chip" data-intelligence-query="entity:collection Eurocontrol">Eurocontrol</button>
+                        </div>
+                        <p class="field-note">Use entity:collection to focus on GTI collections.</p>
+                    </div>
+                    <div class="field-row">
                         <label class="field">
-                            <span>Search Query</span>
-                            <input
-                                id="intelligence_query"
-                                name="intelligence_query"
-                                type="text"
-                                value='entity:collection "Belgian airport"'
-                                placeholder='Example: entity:collection "Industry Snapshot"'
-                            >
+                            <span>Limit</span>
+                            <input id="intelligence_limit" name="intelligence_limit" type="number" value="10" min="1" max="40">
                         </label>
-
                         <div class="field">
-                            <span>Preset Queries</span>
-                            <div class="preset-chip-grid" aria-label="GTI intelligence search presets">
-                                <button
-                                    type="button"
-                                    class="preset-chip"
-                                    data-intelligence-query='entity:collection "Industry Snapshot"'
-                                >
-                                    Industry Snapshot
-                                </button>
-                                <button
-                                    type="button"
-                                    class="preset-chip"
-                                    data-intelligence-query='entity:collection "Aerospace & Defense"'
-                                >
-                                    Aerospace &amp; Defense
-                                </button>
-                                <button
-                                    type="button"
-                                    class="preset-chip"
-                                    data-intelligence-query="entity:collection Transportation"
-                                >
-                                    Transportation
-                                </button>
-                                <button
-                                    type="button"
-                                    class="preset-chip"
-                                    data-intelligence-query="entity:collection Belgium"
-                                >
-                                    Belgium
-                                </button>
-                                <button
-                                    type="button"
-                                    class="preset-chip"
-                                    data-intelligence-query="entity:collection Eurocontrol"
-                                >
-                                    Eurocontrol
-                                </button>
-                            </div>
-                            <p class="field-note">
-                                Broad queries may return files. Use entity:collection to focus on GTI collections/reports.
-                            </p>
-                        </div>
-
-                        <div class="field-row">
-                            <label class="field">
-                                <span>Limit</span>
-                                <input
-                                    id="intelligence_limit"
-                                    name="intelligence_limit"
-                                    type="number"
-                                    value="10"
-                                    min="1"
-                                    max="40"
-                                >
-                            </label>
-
-                            <div class="field checkbox-field">
-                                <span>Descriptors Only</span>
-                                <label class="checkbox-option" for="intelligence_descriptors_only">
-                                    <input
-                                        id="intelligence_descriptors_only"
-                                        name="intelligence_descriptors_only"
-                                        type="checkbox"
-                                    >
-                                    <span>Request descriptors only</span>
-                                </label>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div id="top-targets-fields" class="report-form" hidden>
-                        <p class="workflow-note">
-                            Aggregates the most attacked industries and companies by scanning GTI
-                            collections from the selected period. Each industry or company is counted
-                            at most once per collection. Industries come from collection metadata;
-                            company data falls back to collection details only when preview org fields
-                            are absent.
-                        </p>
-
-                        <div class="field-row">
-                            <label class="field">
-                                <span>Start Year</span>
-                                <input
-                                    id="top_targets_start_year"
-                                    name="top_targets_start_year"
-                                    type="number"
-                                    value="2024"
-                                    min="2018"
-                                    max="2100"
-                                >
-                            </label>
-
-                            <label class="field">
-                                <span>End Year <small>(optional, same year = single year)</small></span>
-                                <input
-                                    id="top_targets_end_year"
-                                    name="top_targets_end_year"
-                                    type="number"
-                                    placeholder="Leave blank for single year"
-                                    min="2018"
-                                    max="2100"
-                                >
-                            </label>
-                        </div>
-
-                        <div class="field-row">
-                            <label class="field">
-                                <span>Top N results</span>
-                                <input
-                                    id="top_targets_top_n"
-                                    name="top_targets_top_n"
-                                    type="number"
-                                    value="10"
-                                    min="1"
-                                    max="50"
-                                >
-                            </label>
-
-                            <label class="field">
-                                <span>Search pages <small>(×40 collections each)</small></span>
-                                <input
-                                    id="top_targets_max_pages"
-                                    name="top_targets_max_pages"
-                                    type="number"
-                                    value="3"
-                                    min="1"
-                                    max="5"
-                                >
+                            <span>Options</span>
+                            <label class="checkbox-option" for="intelligence_descriptors_only">
+                                <input id="intelligence_descriptors_only" name="intelligence_descriptors_only" type="checkbox">
+                                <span>Descriptors only</span>
                             </label>
                         </div>
                     </div>
+                </div>
 
-                    <div id="company-dtm-fields" class="report-form" hidden>
+                <!-- Top Targets fields -->
+                <div id="top-targets-fields" class="form-block" hidden>
+                    <div class="field-row">
                         <label class="field">
-                            <span>Company Name</span>
-                            <input
-                                id="company_name"
-                                name="company_name"
-                                type="text"
-                                placeholder="Example: Contoso"
-                            >
+                            <span>Start Year</span>
+                            <input id="top_targets_start_year" name="top_targets_start_year" type="number" value="2024" min="2018" max="2100">
                         </label>
-
                         <label class="field">
-                            <span>Primary Domain</span>
-                            <input
-                                id="primary_domain"
-                                name="primary_domain"
-                                type="text"
-                                placeholder="example.com"
-                            >
-                        </label>
-
-                        <label class="field">
-                            <span>Keywords</span>
-                            <input
-                                id="keywords"
-                                name="keywords"
-                                type="text"
-                                placeholder="Brand names, executives, products, comma-separated"
-                            >
-                        </label>
-
-                        <label class="field">
-                            <span>Monitor ID (Optional)</span>
-                            <input
-                                id="monitor_id"
-                                name="monitor_id"
-                                type="text"
-                                placeholder="Filter DTM alerts to one specific monitor"
-                            >
+                            <span>End Year <small>(optional)</small></span>
+                            <input id="top_targets_end_year" name="top_targets_end_year" type="number" placeholder="Same as start" min="2018" max="2100">
                         </label>
                     </div>
+                    <div class="field-row">
+                        <label class="field">
+                            <span>Top N</span>
+                            <input id="top_targets_top_n" name="top_targets_top_n" type="number" value="10" min="1" max="50">
+                        </label>
+                        <label class="field">
+                            <span>Pages <small>(×40)</small></span>
+                            <input id="top_targets_max_pages" name="top_targets_max_pages" type="number" value="3" min="1" max="5">
+                        </label>
+                    </div>
+                </div>
 
-                    <div id="report-scope-fields" class="field-row">
+                <!-- Company / DTM fields -->
+                <div id="company-dtm-fields" class="form-block" hidden>
+                    <label class="field">
+                        <span>Company Name</span>
+                        <input id="company_name" name="company_name" type="text" placeholder="Contoso">
+                    </label>
+                    <label class="field">
+                        <span>Primary Domain</span>
+                        <input id="primary_domain" name="primary_domain" type="text" placeholder="example.com">
+                    </label>
+                    <label class="field">
+                        <span>Keywords</span>
+                        <input id="keywords" name="keywords" type="text" placeholder="Brand names, executives, comma-separated">
+                    </label>
+                    <label class="field">
+                        <span>Monitor ID <small>(optional)</small></span>
+                        <input id="monitor_id" name="monitor_id" type="text" placeholder="Filter DTM alerts to one monitor">
+                    </label>
+                </div>
+
+                <!-- Scope: Year + Target (IoC Enrichment / Industry Snapshot) -->
+                <div id="report-scope-fields" class="form-block">
+                    <div class="field-row">
                         <label class="field">
                             <span>Year</span>
-                            <input
-                                id="year"
-                                name="year"
-                                type="number"
-                                value="2025"
-                                min="2000"
-                                max="2100"
-                                required
-                            >
+                            <input id="year" name="year" type="number" value="2025" min="2000" max="2100" required>
                         </label>
-
                         <label class="field">
                             <span id="target-label">Target (Optional)</span>
-                            <input
-                                id="target"
-                                name="target"
-                                type="text"
-                                placeholder="Company, region, or industry"
-                            >
+                            <input id="target" name="target" type="text" placeholder="Company, region, or industry">
                         </label>
                     </div>
+                </div>
 
-                    <fieldset id="report-sections-group" class="config-group">
-                        <legend>Report Sections</legend>
-                        <div class="option-grid" aria-label="Report sections">
-                            <label class="option-card">
-                                <input type="checkbox" name="sections" value="Executive Summary" checked>
-                                <span class="option-copy">Executive Summary</span>
-                            </label>
-                            <label class="option-card">
-                                <input type="checkbox" name="sections" value="Technical Details" checked>
-                                <span class="option-copy">Technical Details</span>
-                            </label>
-                            <label class="option-card">
-                                <input type="checkbox" name="sections" value="IoCs" checked>
-                                <span class="option-copy">IoCs</span>
-                            </label>
-                            <label class="option-card">
-                                <input type="checkbox" name="sections" value="Threat Actors" checked>
-                                <span class="option-copy">Threat Actors</span>
-                            </label>
-                            <label class="option-card">
-                                <input type="checkbox" name="sections" value="Industries Impacted" checked>
-                                <span class="option-copy">Industries Impacted</span>
-                            </label>
-                            <label class="option-card">
-                                <input type="checkbox" name="sections" value="Affected Companies" checked>
-                                <span class="option-copy">Affected Companies</span>
-                            </label>
-                            <label class="option-card">
-                                <input type="checkbox" name="sections" value="Recommended SOC Actions" checked>
-                                <span class="option-copy">Recommended SOC Actions</span>
-                            </label>
-                            <label class="option-card">
-                                <input type="checkbox" name="sections" value="Raw GTI Data">
-                                <span class="option-copy">Raw GTI Data</span>
-                            </label>
-                        </div>
-                    </fieldset>
-
-                    <fieldset id="output-format-group" class="config-group">
-                        <legend>Output Format</legend>
-                        <div class="format-options" aria-label="Output format">
-                            <label class="option-card">
-                                <input type="radio" name="output_format" value="markdown" checked>
-                                <span class="option-copy">Markdown</span>
-                            </label>
-                            <label class="option-card">
-                                <input type="radio" name="output_format" value="html">
-                                <span class="option-copy">HTML</span>
-                            </label>
-                            <label class="option-card option-card-disabled">
-                                <input type="radio" name="output_format" value="docx" disabled>
-                                <span class="option-copy">
-                                    DOCX
-                                    <span class="option-meta">Coming later</span>
-                                </span>
-                            </label>
-                        </div>
-                    </fieldset>
-
-                    <div id="report-actions" class="form-actions">
-                        <button id="generate-button" type="submit" class="generate-button">
-                            Generate Report
-                        </button>
+                <!-- Report Sections -->
+                <fieldset id="report-sections-group" class="form-block config-group">
+                    <legend>Report Sections</legend>
+                    <div class="sections-list">
+                        <label class="section-toggle"><input type="checkbox" name="sections" value="Executive Summary" checked><span>Executive Summary</span></label>
+                        <label class="section-toggle"><input type="checkbox" name="sections" value="Technical Details" checked><span>Technical Details</span></label>
+                        <label class="section-toggle"><input type="checkbox" name="sections" value="IoCs" checked><span>IoCs</span></label>
+                        <label class="section-toggle"><input type="checkbox" name="sections" value="Threat Actors" checked><span>Threat Actors</span></label>
+                        <label class="section-toggle"><input type="checkbox" name="sections" value="Industries Impacted" checked><span>Industries Impacted</span></label>
+                        <label class="section-toggle"><input type="checkbox" name="sections" value="Affected Companies" checked><span>Affected Companies</span></label>
+                        <label class="section-toggle"><input type="checkbox" name="sections" value="Recommended SOC Actions" checked><span>Recommended SOC Actions</span></label>
+                        <label class="section-toggle"><input type="checkbox" name="sections" value="Raw GTI Data"><span>Raw GTI Data</span></label>
                     </div>
+                </fieldset>
 
-                    <div id="explorer-actions" class="form-actions" hidden>
-                        <button
-                            id="explorer-button"
-                            type="button"
-                            class="generate-button secondary-button"
-                        >
-                            Run Explorer
-                        </button>
+                <!-- Output Format -->
+                <fieldset id="output-format-group" class="form-block config-group">
+                    <legend>Output Format</legend>
+                    <div class="format-row">
+                        <label class="format-option">
+                            <input type="radio" name="output_format" value="markdown" checked>
+                            <span>Markdown</span>
+                        </label>
+                        <label class="format-option">
+                            <input type="radio" name="output_format" value="html">
+                            <span>HTML</span>
+                        </label>
+                        <label class="format-option format-disabled">
+                            <input type="radio" name="output_format" value="docx" disabled>
+                            <span>DOCX <em>soon</em></span>
+                        </label>
                     </div>
+                </fieldset>
 
-                    <div id="company-dtm-actions" class="form-actions" hidden>
-                        <button
-                            id="dtm-monitors-button"
-                            type="button"
-                            class="generate-button secondary-button"
-                        >
-                            Test DTM Monitors
-                        </button>
-                        <button
-                            id="dtm-alerts-button"
-                            type="button"
-                            class="generate-button secondary-button"
-                        >
-                            Test DTM Alerts
-                        </button>
+                <!-- Action Buttons -->
+                <div class="form-block form-actions-block">
+                    <div id="report-actions">
+                        <button id="generate-button" type="submit" class="btn btn-primary btn-full">Generate Report</button>
                     </div>
-
-                    <div id="intelligence-search-actions" class="form-actions" hidden>
-                        <button
-                            id="intelligence-search-button"
-                            type="button"
-                            class="generate-button secondary-button"
-                        >
-                            Search GTI
-                        </button>
+                    <div id="explorer-actions" hidden>
+                        <button id="explorer-button" type="button" class="btn btn-primary btn-full">Run Explorer</button>
                     </div>
-
-                    <div id="top-targets-actions" class="form-actions" hidden>
-                        <button
-                            id="top-targets-button"
-                            type="button"
-                            class="generate-button secondary-button"
-                        >
-                            Run Ranking
-                        </button>
+                    <div id="company-dtm-actions" class="dtm-actions" hidden>
+                        <button id="dtm-monitors-button" type="button" class="btn btn-secondary btn-full">Test DTM Monitors</button>
+                        <button id="dtm-alerts-button" type="button" class="btn btn-secondary btn-full">Test DTM Alerts</button>
                     </div>
-                </form>
-            </section>
-
-            <section class="panel panel-results" aria-labelledby="results-title">
-                <div class="panel-heading">
-                    <p class="panel-kicker">Output Feed</p>
-                    <div class="results-header">
-                        <h2 id="results-title">Generated Report</h2>
-                        <span id="status-pill" class="status-pill idle">Idle</span>
+                    <div id="intelligence-search-actions" hidden>
+                        <button id="intelligence-search-button" type="button" class="btn btn-primary btn-full">Search GTI</button>
+                    </div>
+                    <div id="top-targets-actions" hidden>
+                        <button id="top-targets-button" type="button" class="btn btn-primary btn-full">Run Ranking</button>
                     </div>
                 </div>
 
-                <div id="message-banner" class="message-banner" hidden></div>
+            </form>
+        </aside>
 
+        <!-- ── Main Content ──────────────────────────────────── -->
+        <main class="main-content">
+
+            <div class="main-topbar">
+                <div class="topbar-left">
+                    <span id="status-pill" class="status-pill idle">Idle</span>
+                    <div id="message-banner" class="message-banner" hidden></div>
+                </div>
+                <button
+                    id="download-button"
+                    type="button"
+                    class="btn btn-secondary"
+                    hidden
+                    disabled
+                >
+                    Download Report
+                </button>
+            </div>
+
+            <div class="tab-bar" role="tablist">
+                <button class="tab-btn active" data-tab="report" role="tab">Report</button>
+                <button class="tab-btn" data-tab="rankings" role="tab">Live Rankings</button>
+                <button class="tab-btn" data-tab="json" role="tab">Raw JSON</button>
+            </div>
+
+            <!-- Tab: Report -->
+            <div class="tab-panel" id="tab-report" role="tabpanel">
                 <article id="report-output" class="report-output empty-state">
-                    <h3>No report generated yet</h3>
-                    <p>
-                        Fill in the form, call the backend, and the rendered Markdown report
-                        will appear here.
-                    </p>
+                    <h3 id="empty-state-title">No report generated yet</h3>
+                    <p id="empty-state-text">Fill in the form on the left and run a query — the result will appear here.</p>
                 </article>
+            </div>
 
-                <div class="result-actions">
-                    <button
-                        id="download-button"
-                        type="button"
-                        class="generate-button secondary-button"
-                        hidden
-                        disabled
-                    >
-                        Download Report
-                    </button>
+            <!-- Tab: Live Rankings -->
+            <div class="tab-panel hidden" id="tab-rankings" role="tabpanel">
+                <div class="rankings-panel">
+                    <div class="stats-toolbar">
+                        <label class="field">
+                            <span>Year</span>
+                            <input id="stats_year" name="stats_year" type="number" value="2024" min="2018" max="2100">
+                        </label>
+                        <label class="field stats-target-field">
+                            <span>Filter by Target</span>
+                            <input id="stats_target" name="stats_target" type="text" placeholder="ex: finance, microsoft…">
+                        </label>
+                    </div>
+                    <div class="stats-charts-grid">
+                        <div class="stats-chart-panel">
+                            <h3 class="stats-chart-title">Top 10 Industries</h3>
+                            <div id="industries-chart" class="chart-area">
+                                <p><em>Enter your API key to load data.</em></p>
+                            </div>
+                        </div>
+                        <div class="stats-chart-panel">
+                            <h3 class="stats-chart-title">Top 10 Companies / Organizations</h3>
+                            <div id="companies-chart" class="chart-area">
+                                <p><em>Enter your API key to load data.</em></p>
+                            </div>
+                            <div id="companies-source-badge" class="source-badge-area"></div>
+                        </div>
+                    </div>
                 </div>
+            </div>
 
-                <details id="raw-json-details" class="raw-json-panel">
-                    <summary>Raw JSON Response</summary>
+            <!-- Tab: Raw JSON -->
+            <div class="tab-panel hidden" id="tab-json" role="tabpanel">
+                <div class="json-panel">
                     <pre id="raw-json-output">No response yet.</pre>
-                </details>
-            </section>
+                </div>
+            </div>
+
         </main>
-
-        <section class="panel panel-stats" aria-labelledby="stats-title">
-            <div class="panel-heading">
-                <p class="panel-kicker">Live Rankings</p>
-                <h2 id="stats-title">Top Targeted Entities</h2>
-            </div>
-
-            <div class="stats-toolbar">
-                <label class="field">
-                    <span>Year</span>
-                    <input
-                        id="stats_year"
-                        name="stats_year"
-                        type="number"
-                        value="2024"
-                        min="2018"
-                        max="2100"
-                    >
-                </label>
-                <label class="field stats-target-field">
-                    <span>Filter by Target</span>
-                    <input
-                        id="stats_target"
-                        name="stats_target"
-                        type="text"
-                        placeholder="ex: finance, microsoft…"
-                    >
-                </label>
-            </div>
-
-            <div class="stats-charts-grid">
-                <div class="stats-chart-panel">
-                    <h3 class="stats-chart-title">Top 10 Industries</h3>
-                    <div id="industries-chart" class="chart-area">
-                        <p><em>Enter your API key above to load data.</em></p>
-                    </div>
-                </div>
-                <div class="stats-chart-panel">
-                    <h3 class="stats-chart-title">Top 10 Companies / Organizations</h3>
-                    <div id="companies-chart" class="chart-area">
-                        <p><em>Enter your API key above to load data.</em></p>
-                    </div>
-                    <div id="companies-source-badge" class="source-badge-area"></div>
-                </div>
-            </div>
-        </section>
     </div>
 
     <script src="/app.js"></script>

@@ -45,12 +45,50 @@ const statsTargetField = document.getElementById("stats_target");
 const industriesChartEl = document.getElementById("industries-chart");
 const companiesChartEl = document.getElementById("companies-chart");
 const companiesSourceBadgeEl = document.getElementById("companies-source-badge");
+const modeCard = document.getElementById("mode-card");
+const modeCardLabel = document.getElementById("mode-card-label");
+const modeCardText = document.getElementById("mode-card-text");
+const emptyStateTitle = document.getElementById("empty-state-title");
+const emptyStateText = document.getElementById("empty-state-text");
 
 const IOC_ENRICHMENT = "IoC Enrichment";
 const INDUSTRY_SNAPSHOT_EXPLORER = "Industry Snapshot Explorer";
 const COMPANY_EXPOSURE_DTM = "Company Exposure / DTM";
 const GTI_INTELLIGENCE_SEARCH = "GTI Intelligence Search";
 const TOP_TARGETS_RANKING = "Top Targets Ranking";
+
+const MODE_META = {
+    [IOC_ENRICHMENT]: {
+        label: "IoC Enrichment",
+        description: "Generates a structured analyst report from GTI data on a target domain. Configure which sections to include and the output format below.",
+        emptyTitle: "Ready to generate a report",
+        emptyText: "Enter a target domain, select the sections to include, and click Generate Report.",
+    },
+    [INDUSTRY_SNAPSHOT_EXPLORER]: {
+        label: "Industry Snapshot Explorer",
+        description: "Scans GTI collections for Industry Snapshot reports and returns their metadata: publication dates, targeted sectors, regions, and summaries.",
+        emptyTitle: "Ready to explore",
+        emptyText: "Click Explore Industry Snapshots to browse GTI collections matching the snapshot filter.",
+    },
+    [COMPANY_EXPOSURE_DTM]: {
+        label: "Company Exposure / DTM",
+        description: "Queries your Digital Threat Monitoring watchlists and their recent alerts. Use this to verify API connectivity and review active monitors before generating a report.",
+        emptyTitle: "Ready to test DTM",
+        emptyText: "Fill in your company details, then click Test DTM Monitors or Test DTM Alerts.",
+    },
+    [GTI_INTELLIGENCE_SEARCH]: {
+        label: "GTI Intelligence Search",
+        description: "Free-text search across GTI objects — collections, files, and threat actors. Use preset queries or write your own to explore available intelligence.",
+        emptyTitle: "Ready to search",
+        emptyText: "Enter a search query or choose a preset, then click Search GTI.",
+    },
+    [TOP_TARGETS_RANKING]: {
+        label: "Top Targets Ranking",
+        description: "Scans GTI collections from a selected period and ranks the most frequently targeted industries and companies. Each entity is counted at most once per collection.",
+        emptyTitle: "Ready to rank",
+        emptyText: "Set the time range and search parameters, then click Run Ranking.",
+    },
+};
 
 let lastGeneratedReport = "";
 let lastDownloadFilename = "";
@@ -254,6 +292,24 @@ function setDownloadState(isReady, filename = "", outputFormat = "markdown") {
         : "Download Report (.md)";
 }
 
+function updateModeCard(type) {
+    const meta = MODE_META[type];
+    if (!meta) return;
+    modeCardLabel.textContent = meta.label;
+    modeCardText.textContent = meta.description;
+    modeCard.style.animation = "none";
+    void modeCard.offsetWidth; // force reflow to restart animation
+    modeCard.style.animation = "modeCardUpdate 0.2s ease";
+}
+
+function updateEmptyState(type) {
+    if (!reportOutput.classList.contains("empty-state")) return;
+    const meta = MODE_META[type];
+    if (!meta) return;
+    emptyStateTitle.textContent = meta.emptyTitle;
+    emptyStateText.textContent = meta.emptyText;
+}
+
 function syncTargetRequirement() {
     const isExplorerMode = (
         reportTypeField.value === INDUSTRY_SNAPSHOT_EXPLORER
@@ -292,6 +348,9 @@ function syncTargetRequirement() {
         lastGeneratedReport = "";
         setDownloadState(false);
     }
+
+    updateModeCard(reportTypeField.value);
+    updateEmptyState(reportTypeField.value);
 }
 
 function buildHtmlDownloadDocument(filename, markdown) {
@@ -749,6 +808,7 @@ async function runSelectedExplorer() {
         }
 
         renderIndustrySnapshotResult(responseData);
+        switchToTab("report");
         rawJsonOutput.textContent = JSON.stringify(responseData.raw_json, null, 2);
 
         if (responseData.http_status === 200) {
@@ -901,6 +961,7 @@ async function searchGtiIntelligence() {
         activeCollectionAnalysisId = "";
         collectionAnalysisInProgressId = "";
         renderIntelligenceSearchResult(responseData);
+        switchToTab("report");
         rawJsonOutput.textContent = JSON.stringify(responseData.raw_data, null, 2);
 
         if (responseData.status_code === 200) {
@@ -974,6 +1035,7 @@ async function testDtmMonitors() {
         }
 
         renderCompanyDtmMonitorsResult(responseData);
+        switchToTab("report");
         rawJsonOutput.textContent = JSON.stringify(
             responseData.raw_data || responseData.raw_json,
             null,
@@ -1037,6 +1099,7 @@ async function testDtmAlerts() {
         }
 
         renderCompanyDtmAlertsResult(responseData);
+        switchToTab("report");
         rawJsonOutput.textContent = JSON.stringify(responseData.raw_json, null, 2);
 
         if (responseData.http_status === 200) {
@@ -1184,6 +1247,7 @@ async function runTopTargetsRanking() {
         }
 
         renderTopTargetsResult(responseData);
+        switchToTab("report");
         rawJsonOutput.textContent = JSON.stringify(responseData, null, 2);
 
         const industryCount = responseData.top_industries?.length || 0;
@@ -1286,6 +1350,7 @@ async function generateReport(event) {
 
         reportOutput.classList.remove("empty-state");
         reportOutput.innerHTML = markdownToHtml(responseData.report_markdown);
+        switchToTab("report");
         rawJsonOutput.textContent = JSON.stringify(responseData.raw_data, null, 2);
         updateStatus(responseData.status || "Success", "success");
         lastGeneratedReport = responseData.report_markdown;
@@ -1340,6 +1405,7 @@ reportOutput.addEventListener("click", handleReportOutputClick);
 reportForm.addEventListener("submit", generateReport);
 setDownloadState(false);
 syncTargetRequirement();
+reportForm.dataset.initialized = "true"; // enable field animations after initial render
 
 let statsDebounceTimer = null;
 
@@ -1412,3 +1478,15 @@ statsYearField.addEventListener("change", onStatsInputChange);
 statsTargetField.addEventListener("input", onStatsInputChange);
 apiKeyField.addEventListener("change", refreshStats);
 refreshStats();
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+
+const tabBtns = document.querySelectorAll(".tab-btn");
+const tabPanels = document.querySelectorAll(".tab-panel");
+
+function switchToTab(tabId) {
+    tabBtns.forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === tabId));
+    tabPanels.forEach((panel) => panel.classList.toggle("hidden", panel.id !== `tab-${tabId}`));
+}
+
+tabBtns.forEach((btn) => btn.addEventListener("click", () => switchToTab(btn.dataset.tab)));
