@@ -282,7 +282,7 @@ def aggregate_top_targets(
     start_year: int = 2024,
     end_year: int | None = None,
     top_n: int = 10,
-    max_pages: int = 3,
+    max_collections: int | None = None,
 ) -> dict[str, Any]:
     """Aggregate top targeted industries and companies from GTI Intelligence Search.
 
@@ -291,6 +291,7 @@ def aggregate_top_targets(
     - Extract targeted_industries directly from each search result (no extra API calls)
     - Fetch collection details for a subset to extract company/org aggregations
     - Return ranked lists for both industries and companies
+    Paginates until next_cursor is exhausted or max_collections is reached.
     """
 
     normalized_api_key = api_key.strip()
@@ -311,9 +312,15 @@ def aggregate_top_targets(
     collections_analyzed: list[dict[str, Any]] = []
     collections_requiring_company_details: list[dict[str, Any]] = []
     seen_collection_ids: set[str] = set()
+    collections_with_industries = 0
+    collections_without_industries = 0
+    pages_fetched = 0
     cursor: str | None = None
 
-    for _ in range(max_pages):
+    while True:
+        if max_collections is not None and len(seen_collection_ids) >= max_collections:
+            break
+
         search_result = intelligence_search(
             api_key=normalized_api_key,
             query=query,
@@ -324,20 +331,20 @@ def aggregate_top_targets(
             search_result,
             "intelligence search",
         )
+        pages_fetched += 1
 
         items = search_result.get("simplified_preview", [])
         for item in items:
-            # Industries — available directly in the search preview
-            # Organizations — may also be in the search preview (varies by GTI plan/collection type)
+            if max_collections is not None and len(seen_collection_ids) >= max_collections:
+                break
+
             coll_id = _stringify_value(item.get("id")) or ""
             if not coll_id or coll_id in seen_collection_ids:
                 continue
 
             seen_collection_ids.add(coll_id)
             preview_industries = _extract_names_from_field(item.get("targeted_industries"))
-            preview_companies = _extract_names_from_field(
-                item.get("targeted_organizations")
-            )
+            preview_companies = _extract_names_from_field(item.get("targeted_organizations"))
             _count_distinct_collection_mentions(
                 industry_counter,
                 industry_display_names,
@@ -348,6 +355,11 @@ def aggregate_top_targets(
                 company_display_names,
                 preview_companies,
             )
+
+            if preview_industries:
+                collections_with_industries += 1
+            else:
+                collections_without_industries += 1
 
             collection_metadata = {
                 "id": coll_id,
@@ -421,6 +433,11 @@ def aggregate_top_targets(
         "end_year": effective_end_year,
         "top_n": top_n,
         "collections_analyzed": len(collections_analyzed),
+        "collections_seen": len(seen_collection_ids),
+        "collections_with_targeted_industries": collections_with_industries,
+        "collections_without_targeted_industries": collections_without_industries,
+        "unique_industries_count": len(industry_counter),
+        "pages_fetched": pages_fetched,
         "company_detail_lookups_attempted": company_detail_lookups_attempted,
         "company_detail_lookups_succeeded": company_detail_lookups_succeeded,
         "top_industries": ranked_industries,
@@ -1407,7 +1424,7 @@ def get_top_industries(
     year: int = 2024,
     top_n: int = 10,
     target: str | None = None,
-    max_pages: int = 3,
+    max_collections: int | None = None,
 ) -> dict[str, Any]:
     """Aggregate top targeted industries for a year via GTI Intelligence Search."""
 
@@ -1426,9 +1443,15 @@ def get_top_industries(
     industry_counter: dict[str, int] = {}
     industry_display_names: dict[str, str] = {}
     seen_collection_ids: set[str] = set()
+    collections_with_industries = 0
+    collections_without_industries = 0
+    pages_fetched = 0
     cursor: str | None = None
 
-    for _ in range(max_pages):
+    while True:
+        if max_collections is not None and len(seen_collection_ids) >= max_collections:
+            break
+
         search_result = intelligence_search(
             api_key=normalized_api_key,
             query=query,
@@ -1437,18 +1460,27 @@ def get_top_industries(
         )
         if _safe_int(search_result.get("status_code")) not in (0, 200):
             break
+        pages_fetched += 1
 
         items = search_result.get("simplified_preview", [])
         for item in items:
+            if max_collections is not None and len(seen_collection_ids) >= max_collections:
+                break
+
             coll_id = _stringify_value(item.get("id")) or ""
             if not coll_id or coll_id in seen_collection_ids:
                 continue
             seen_collection_ids.add(coll_id)
+            industries = _extract_names_from_field(item.get("targeted_industries"))
             _count_distinct_collection_mentions(
                 industry_counter,
                 industry_display_names,
-                _extract_names_from_field(item.get("targeted_industries")),
+                industries,
             )
+            if industries:
+                collections_with_industries += 1
+            else:
+                collections_without_industries += 1
 
         cursor = search_result.get("next_cursor")
         if not cursor or not items:
@@ -1457,6 +1489,11 @@ def get_top_industries(
     return {
         "year": year,
         "source": "search",
+        "collections_seen": len(seen_collection_ids),
+        "collections_with_targeted_industries": collections_with_industries,
+        "collections_without_targeted_industries": collections_without_industries,
+        "unique_industries_count": len(industry_counter),
+        "pages_fetched": pages_fetched,
         "data": _build_ranked_collection_results(
             industry_counter, industry_display_names, top_n
         ),

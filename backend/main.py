@@ -130,7 +130,7 @@ class TopTargetsRequest(BaseModel):
     start_year: int = Field(default=2024, ge=2018, description="Start year of the analysis period.")
     end_year: int | None = Field(default=None, description="End year (inclusive). Defaults to start_year.")
     top_n: int = Field(default=10, ge=1, le=50, description="Number of top results to return.")
-    max_pages: int = Field(default=3, ge=1, le=5, description="Max GTI search pages to fetch (each = 40 results).")
+    max_collections: int | None = Field(default=None, ge=1, description="Stop after this many collections. None = paginate until exhausted.")
 
 
 class TopTargetsResponse(BaseModel):
@@ -139,6 +139,11 @@ class TopTargetsResponse(BaseModel):
     status: str
     period: str
     collections_analyzed: int
+    collections_seen: int = 0
+    collections_with_targeted_industries: int = 0
+    collections_without_targeted_industries: int = 0
+    unique_industries_count: int = 0
+    pages_fetched: int = 0
     company_detail_lookups_attempted: int
     company_detail_lookups_succeeded: int
     top_industries: list[dict[str, Any]]
@@ -497,12 +502,17 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             start_year=request.start_year,
             end_year=request.end_year,
             top_n=request.top_n,
-            max_pages=request.max_pages,
+            max_collections=request.max_collections,
         )
         return TopTargetsResponse(
             status="success",
             period=str(result["period"]),
             collections_analyzed=int(result["collections_analyzed"]),
+            collections_seen=int(result.get("collections_seen", 0)),
+            collections_with_targeted_industries=int(result.get("collections_with_targeted_industries", 0)),
+            collections_without_targeted_industries=int(result.get("collections_without_targeted_industries", 0)),
+            unique_industries_count=int(result.get("unique_industries_count", 0)),
+            pages_fetched=int(result.get("pages_fetched", 0)),
             company_detail_lookups_attempted=int(
                 result["company_detail_lookups_attempted"]
             ),

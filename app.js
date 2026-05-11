@@ -39,7 +39,7 @@ const topTargetsButton = document.getElementById("top-targets-button");
 const topTargetsStartYearField = document.getElementById("top_targets_start_year");
 const topTargetsEndYearField = document.getElementById("top_targets_end_year");
 const topTargetsTopNField = document.getElementById("top_targets_top_n");
-const topTargetsMaxPagesField = document.getElementById("top_targets_max_pages");
+const topTargetsMaxCollectionsField = document.getElementById("top_targets_max_collections");
 const statsYearField = document.getElementById("stats_year");
 const statsTargetField = document.getElementById("stats_target");
 const industriesChartEl = document.getElementById("industries-chart");
@@ -1197,6 +1197,16 @@ function renderTopTargetsResult(responseData) {
             <strong>GTI query:</strong> <code>${escapeHtml(String(responseData.query_used || ""))}</code>
         </p>
         <p><strong>Counting model:</strong> each industry or company is counted at most once per GTI collection.</p>
+        <details class="diagnostics-block">
+            <summary>Diagnostics</summary>
+            <ul>
+                <li><strong>Pages fetched:</strong> ${escapeHtml(String(responseData.pages_fetched ?? 0))}</li>
+                <li><strong>Collections seen:</strong> ${escapeHtml(String(responseData.collections_seen ?? 0))}</li>
+                <li><strong>With targeted_industries:</strong> ${escapeHtml(String(responseData.collections_with_targeted_industries ?? 0))}</li>
+                <li><strong>Without targeted_industries:</strong> ${escapeHtml(String(responseData.collections_without_targeted_industries ?? 0))}</li>
+                <li><strong>Unique industries found:</strong> ${escapeHtml(String(responseData.unique_industries_count ?? 0))}</li>
+            </ul>
+        </details>
         ${detailLookupHtml}
 
         <h2>Top ${escapeHtml(String(responseData.top_industries?.length || 0))} Most Targeted Industries</h2>
@@ -1226,7 +1236,8 @@ async function runTopTargetsRanking() {
     const endYearRaw = topTargetsEndYearField.value.trim();
     const endYear = endYearRaw ? Number(endYearRaw) : null;
     const topN = Number(topTargetsTopNField.value || 10);
-    const maxPages = Number(topTargetsMaxPagesField.value || 3);
+    const maxCollectionsRaw = topTargetsMaxCollectionsField.value.trim();
+    const maxCollections = maxCollectionsRaw ? Number(maxCollectionsRaw) : null;
 
     try {
         const response = await fetch("/explore/top-targets", {
@@ -1237,7 +1248,7 @@ async function runTopTargetsRanking() {
                 start_year: startYear,
                 end_year: endYear,
                 top_n: topN,
-                max_pages: maxPages,
+                max_collections: maxCollections,
             }),
         });
 
