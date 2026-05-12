@@ -11,7 +11,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from backend.gti_client import (
+    DEFAULT_TOP_TARGETS_MAX_COLLECTIONS,
     GTIClientError,
+    MAX_TOP_TARGETS_DETAIL_LOOKUPS,
     MockGTIClient,
     aggregate_top_targets,
     explore_industry_snapshots,
@@ -130,7 +132,9 @@ class TopTargetsRequest(BaseModel):
     start_year: int = Field(default=2024, ge=2018, description="Start year of the analysis period.")
     end_year: int | None = Field(default=None, description="End year (inclusive). Defaults to start_year.")
     top_n: int = Field(default=10, ge=1, le=50, description="Number of top results to return.")
-    max_collections: int | None = Field(default=None, ge=1, description="Stop after this many collections. None = paginate until exhausted.")
+    max_collections: int = Field(default=DEFAULT_TOP_TARGETS_MAX_COLLECTIONS, ge=1, le=DEFAULT_TOP_TARGETS_MAX_COLLECTIONS, description="Stop after this many collections.")
+    deep_organization_lookup: bool = Field(default=False, description="Enable bounded per-collection organization detail lookups.")
+    max_detail_lookups: int | None = Field(default=None, ge=0, le=MAX_TOP_TARGETS_DETAIL_LOOKUPS, description="Maximum per-collection detail lookups when deep organization lookup is enabled.")
 
 
 class TopTargetsResponse(BaseModel):
@@ -144,10 +148,16 @@ class TopTargetsResponse(BaseModel):
     collections_without_targeted_industries: int = 0
     unique_industries_count: int = 0
     pages_fetched: int = 0
+    max_collections: int = DEFAULT_TOP_TARGETS_MAX_COLLECTIONS
+    deep_organization_lookup: bool = False
+    max_detail_lookups: int = 0
+    api_request_estimate: dict[str, Any] = Field(default_factory=dict)
     company_detail_lookups_attempted: int
     company_detail_lookups_succeeded: int
     top_industries: list[dict[str, Any]]
     top_companies: list[dict[str, Any]]
+    top_companies_status: str = "ok"
+    collection_preview_fields: list[dict[str, Any]] = Field(default_factory=list)
     query_used: str
     methodology: str
 
@@ -503,6 +513,8 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             end_year=request.end_year,
             top_n=request.top_n,
             max_collections=request.max_collections,
+            deep_organization_lookup=request.deep_organization_lookup,
+            max_detail_lookups=request.max_detail_lookups,
         )
         return TopTargetsResponse(
             status="success",
@@ -513,6 +525,10 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             collections_without_targeted_industries=int(result.get("collections_without_targeted_industries", 0)),
             unique_industries_count=int(result.get("unique_industries_count", 0)),
             pages_fetched=int(result.get("pages_fetched", 0)),
+            max_collections=int(result.get("max_collections", DEFAULT_TOP_TARGETS_MAX_COLLECTIONS)),
+            deep_organization_lookup=bool(result.get("deep_organization_lookup", False)),
+            max_detail_lookups=int(result.get("max_detail_lookups", 0)),
+            api_request_estimate=result.get("api_request_estimate", {}),
             company_detail_lookups_attempted=int(
                 result["company_detail_lookups_attempted"]
             ),
@@ -521,6 +537,8 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             ),
             top_industries=result["top_industries"],
             top_companies=result["top_companies"],
+            top_companies_status=str(result.get("top_companies_status", "ok")),
+            collection_preview_fields=result.get("collection_preview_fields", []),
             query_used=str(result["query_used"]),
             methodology=str(result["methodology"]),
         )

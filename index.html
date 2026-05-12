@@ -114,8 +114,21 @@
                             <input id="top_targets_top_n" name="top_targets_top_n" type="number" value="10" min="1" max="50">
                         </label>
                         <label class="field">
-                            <span>Max collections <small>(blank = all)</small></span>
-                            <input id="top_targets_max_collections" name="top_targets_max_collections" type="number" placeholder="unlimited" min="1">
+                            <span>Max collections</span>
+                            <input id="top_targets_max_collections" name="top_targets_max_collections" type="number" value="1000" min="1" max="1000">
+                        </label>
+                    </div>
+                    <div class="field-row">
+                        <div class="field checkbox-field">
+                            <span>Organizations</span>
+                            <label class="checkbox-option" for="top_targets_deep_lookup">
+                                <input id="top_targets_deep_lookup" name="top_targets_deep_lookup" type="checkbox">
+                                <span>Deep organization lookup</span>
+                            </label>
+                        </div>
+                        <label class="field">
+                            <span>Max detail lookups</span>
+                            <input id="top_targets_max_detail_lookups" name="top_targets_max_detail_lookups" type="number" value="25" min="0" max="50" disabled>
                         </label>
                     </div>
                 </div>

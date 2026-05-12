@@ -22,6 +22,10 @@ VIRUSTOTAL_DTM_EVENTS_URL = "https://www.virustotal.com/api/v3/dtm/events"
 MAX_SAFE_DTM_PAGES = 5
 DEFAULT_INTELLIGENCE_SEARCH_LIMIT = 10
 MAX_INTELLIGENCE_SEARCH_LIMIT = 40
+DEFAULT_TOP_TARGETS_MAX_COLLECTIONS = 1000
+DEFAULT_TOP_TARGETS_MAX_DETAIL_LOOKUPS = 0
+DEFAULT_TOP_TARGETS_DEEP_DETAIL_LOOKUPS = 25
+MAX_TOP_TARGETS_DETAIL_LOOKUPS = 50
 DEFAULT_DTM_MONITOR_PAGE_SIZE = 50
 DEFAULT_DTM_ALERT_PAGE_SIZE = 25
 MAX_DTM_ALERT_PAGE_SIZE = 25
@@ -283,13 +287,15 @@ def aggregate_top_targets(
     end_year: int | None = None,
     top_n: int = 10,
     max_collections: int | None = None,
+    deep_organization_lookup: bool = False,
+    max_detail_lookups: int | None = None,
 ) -> dict[str, Any]:
     """Aggregate top targeted industries and companies from GTI Intelligence Search.
 
     Strategy:
     - Search GTI for collections created in the given year range
-    - Extract targeted_industries directly from each search result (no extra API calls)
-    - Fetch collection details for a subset to extract company/org aggregations
+    - Extract target fields directly from each search result by default
+    - Fetch collection details only when explicitly enabled and bounded
     - Return ranked lists for both industries and companies
     Paginates until next_cursor is exhausted or max_collections is reached.
     """
@@ -302,8 +308,44 @@ def aggregate_top_targets(
     if effective_end_year < start_year:
         raise ValueError("end_year must be >= start_year.")
 
+    effective_max_collections = (
+        DEFAULT_TOP_TARGETS_MAX_COLLECTIONS
+        if max_collections is None
+        else min(max_collections, DEFAULT_TOP_TARGETS_MAX_COLLECTIONS)
+    )
+    if effective_max_collections < 1:
+        raise ValueError("max_collections must be >= 1.")
+
+    if max_detail_lookups is None:
+        effective_max_detail_lookups = (
+            DEFAULT_TOP_TARGETS_DEEP_DETAIL_LOOKUPS
+            if deep_organization_lookup
+            else DEFAULT_TOP_TARGETS_MAX_DETAIL_LOOKUPS
+        )
+    else:
+        effective_max_detail_lookups = max_detail_lookups
+
+    if effective_max_detail_lookups < 0:
+        raise ValueError("max_detail_lookups must be >= 0.")
+    if not deep_organization_lookup:
+        effective_max_detail_lookups = 0
+    effective_max_detail_lookups = min(
+        effective_max_detail_lookups,
+        MAX_TOP_TARGETS_DETAIL_LOOKUPS,
+    )
+
     date_query = f"creation_date:{start_year}-01-01+ creation_date:{effective_end_year}-12-31-"
     query = f"entity:collection {date_query}"
+    estimated_search_requests = (
+        (effective_max_collections + MAX_INTELLIGENCE_SEARCH_LIMIT - 1)
+        // MAX_INTELLIGENCE_SEARCH_LIMIT
+    )
+    api_request_estimate = {
+        "max_collections": effective_max_collections,
+        "search_requests": estimated_search_requests,
+        "detail_lookup_requests": effective_max_detail_lookups,
+        "total_requests": estimated_search_requests + effective_max_detail_lookups,
+    }
 
     industry_counter: dict[str, int] = {}
     industry_display_names: dict[str, str] = {}
@@ -318,7 +360,7 @@ def aggregate_top_targets(
     cursor: str | None = None
 
     while True:
-        if max_collections is not None and len(seen_collection_ids) >= max_collections:
+        if len(seen_collection_ids) >= effective_max_collections:
             break
 
         search_result = intelligence_search(
@@ -335,7 +377,7 @@ def aggregate_top_targets(
 
         items = search_result.get("simplified_preview", [])
         for item in items:
-            if max_collections is not None and len(seen_collection_ids) >= max_collections:
+            if len(seen_collection_ids) >= effective_max_collections:
                 break
 
             coll_id = _stringify_value(item.get("id")) or ""
@@ -365,9 +407,13 @@ def aggregate_top_targets(
                 "id": coll_id,
                 "name": _stringify_value(item.get("name") or item.get("title")) or "",
                 "collection_type": _stringify_value(item.get("collection_type")) or "",
+                "targeted_industries": item.get("targeted_industries"),
+                "targeted_regions": item.get("targeted_regions"),
+                "source_regions": item.get("source_regions"),
+                "tags": item.get("tags"),
             }
             collections_analyzed.append(collection_metadata)
-            if not preview_companies:
+            if deep_organization_lookup and not preview_companies:
                 collections_requiring_company_details.append(collection_metadata)
 
         cursor = search_result.get("next_cursor")
@@ -378,7 +424,7 @@ def aggregate_top_targets(
     # This keeps company counts conservative and avoids double-counting one collection.
     company_detail_lookups_attempted = 0
     company_detail_lookups_succeeded = 0
-    for coll in collections_requiring_company_details:
+    for coll in collections_requiring_company_details[:effective_max_detail_lookups]:
         company_detail_lookups_attempted += 1
         try:
             details = get_collection_details(normalized_api_key, coll["id"])
@@ -414,6 +460,7 @@ def aggregate_top_targets(
         company_display_names,
         top_n,
     )
+    top_companies_status = "ok" if ranked_companies else "not enough data"
 
     if company_detail_lookups_attempted:
         company_methodology = (
@@ -424,7 +471,8 @@ def aggregate_top_targets(
         )
     else:
         company_methodology = (
-            "Companies: counted once per collection from preview organization fields."
+            "Companies: counted once per collection from preview organization fields; "
+            "collection detail lookups are disabled unless Deep organization lookup is enabled."
         )
 
     return {
@@ -433,7 +481,12 @@ def aggregate_top_targets(
         "end_year": effective_end_year,
         "top_n": top_n,
         "collections_analyzed": len(collections_analyzed),
+        "collection_preview_fields": collections_analyzed,
         "collections_seen": len(seen_collection_ids),
+        "max_collections": effective_max_collections,
+        "deep_organization_lookup": deep_organization_lookup,
+        "max_detail_lookups": effective_max_detail_lookups,
+        "api_request_estimate": api_request_estimate,
         "collections_with_targeted_industries": collections_with_industries,
         "collections_without_targeted_industries": collections_without_industries,
         "unique_industries_count": len(industry_counter),
@@ -442,6 +495,7 @@ def aggregate_top_targets(
         "company_detail_lookups_succeeded": company_detail_lookups_succeeded,
         "top_industries": ranked_industries,
         "top_companies": ranked_companies,
+        "top_companies_status": top_companies_status,
         "query_used": query,
         "methodology": (
             f"Analyzed {len(collections_analyzed)} distinct GTI collections from "
@@ -1541,7 +1595,7 @@ def get_top_companies(
         api_key=normalized_api_key,
         start_year=year,
         top_n=top_n,
-        max_pages=max_pages,
+        max_collections=max_pages * MAX_INTELLIGENCE_SEARCH_LIMIT,
     )
     return {
         "year": year,

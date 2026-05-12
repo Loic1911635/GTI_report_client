@@ -40,6 +40,8 @@ const topTargetsStartYearField = document.getElementById("top_targets_start_year
 const topTargetsEndYearField = document.getElementById("top_targets_end_year");
 const topTargetsTopNField = document.getElementById("top_targets_top_n");
 const topTargetsMaxCollectionsField = document.getElementById("top_targets_max_collections");
+const topTargetsDeepLookupField = document.getElementById("top_targets_deep_lookup");
+const topTargetsMaxDetailLookupsField = document.getElementById("top_targets_max_detail_lookups");
 const statsYearField = document.getElementById("stats_year");
 const statsTargetField = document.getElementById("stats_target");
 const industriesChartEl = document.getElementById("industries-chart");
@@ -56,6 +58,10 @@ const INDUSTRY_SNAPSHOT_EXPLORER = "Industry Snapshot Explorer";
 const COMPANY_EXPOSURE_DTM = "Company Exposure / DTM";
 const GTI_INTELLIGENCE_SEARCH = "GTI Intelligence Search";
 const TOP_TARGETS_RANKING = "Top Targets Ranking";
+const TOP_TARGETS_DEFAULT_MAX_COLLECTIONS = 1000;
+const TOP_TARGETS_SEARCH_PAGE_SIZE = 40;
+const TOP_TARGETS_DEFAULT_DEEP_LOOKUPS = 25;
+const TOP_TARGETS_MAX_DETAIL_LOOKUPS = 50;
 
 const MODE_META = {
     [IOC_ENRICHMENT]: {
@@ -268,6 +274,34 @@ function setTopTargetsLoadingState(isLoading) {
     topTargetsButton.disabled = isLoading;
     topTargetsButton.textContent = isLoading ? "Analyzing GTI collections..." : "Run Ranking";
     updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
+}
+
+function syncTopTargetsDeepLookupControls() {
+    topTargetsMaxDetailLookupsField.disabled = !topTargetsDeepLookupField.checked;
+    if (topTargetsDeepLookupField.checked && !topTargetsMaxDetailLookupsField.value.trim()) {
+        topTargetsMaxDetailLookupsField.value = String(TOP_TARGETS_DEFAULT_DEEP_LOOKUPS);
+    }
+}
+
+function buildTopTargetsRequestEstimate(maxCollections, deepLookup, maxDetailLookups) {
+    const boundedCollections = Math.min(
+        Math.max(Number(maxCollections) || TOP_TARGETS_DEFAULT_MAX_COLLECTIONS, 1),
+        TOP_TARGETS_DEFAULT_MAX_COLLECTIONS,
+    );
+    const detailLookups = deepLookup
+        ? Math.min(
+            Math.max(Number(maxDetailLookups) || TOP_TARGETS_DEFAULT_DEEP_LOOKUPS, 0),
+            TOP_TARGETS_MAX_DETAIL_LOOKUPS,
+        )
+        : 0;
+    const searchRequests = Math.ceil(boundedCollections / TOP_TARGETS_SEARCH_PAGE_SIZE);
+
+    return {
+        maxCollections: boundedCollections,
+        searchRequests,
+        detailLookups,
+        totalRequests: searchRequests + detailLookups,
+    };
 }
 
 function getSelectedSections() {
@@ -1177,9 +1211,12 @@ function renderRankingTable(items, countLabel) {
 
 function renderTopTargetsResult(responseData) {
     const industriesHtml = renderRankingTable(responseData.top_industries, "collections");
-    const companiesHtml = renderRankingTable(responseData.top_companies, "collections");
+    const companiesHtml = responseData.top_companies_status === "not enough data"
+        ? "<p><em>not enough data: no organization preview fields were present. Enable Deep organization lookup to use bounded per-collection detail lookups.</em></p>"
+        : renderRankingTable(responseData.top_companies, "collections");
     const detailLookupsAttempted = Number(responseData.company_detail_lookups_attempted || 0);
     const detailLookupsSucceeded = Number(responseData.company_detail_lookups_succeeded || 0);
+    const estimate = responseData.api_request_estimate || {};
     const detailLookupHtml = detailLookupsAttempted > 0
         ? `
         <p>
@@ -1202,6 +1239,9 @@ function renderTopTargetsResult(responseData) {
             <ul>
                 <li><strong>Pages fetched:</strong> ${escapeHtml(String(responseData.pages_fetched ?? 0))}</li>
                 <li><strong>Collections seen:</strong> ${escapeHtml(String(responseData.collections_seen ?? 0))}</li>
+                <li><strong>Max collections:</strong> ${escapeHtml(String(responseData.max_collections ?? 0))}</li>
+                <li><strong>Deep organization lookup:</strong> ${escapeHtml(String(Boolean(responseData.deep_organization_lookup)))}</li>
+                <li><strong>Request estimate:</strong> ${escapeHtml(String(estimate.total_requests ?? 0))} total (${escapeHtml(String(estimate.search_requests ?? 0))} search + ${escapeHtml(String(estimate.detail_lookup_requests ?? 0))} detail)</li>
                 <li><strong>With targeted_industries:</strong> ${escapeHtml(String(responseData.collections_with_targeted_industries ?? 0))}</li>
                 <li><strong>Without targeted_industries:</strong> ${escapeHtml(String(responseData.collections_without_targeted_industries ?? 0))}</li>
                 <li><strong>Unique industries found:</strong> ${escapeHtml(String(responseData.unique_industries_count ?? 0))}</li>
@@ -1228,16 +1268,39 @@ async function runTopTargetsRanking() {
     }
 
     clearMessage();
-    setTopTargetsLoadingState(true);
-    setDownloadState(false);
-    lastGeneratedReport = "";
 
     const startYear = Number(topTargetsStartYearField.value || 2024);
     const endYearRaw = topTargetsEndYearField.value.trim();
     const endYear = endYearRaw ? Number(endYearRaw) : null;
     const topN = Number(topTargetsTopNField.value || 10);
     const maxCollectionsRaw = topTargetsMaxCollectionsField.value.trim();
-    const maxCollections = maxCollectionsRaw ? Number(maxCollectionsRaw) : null;
+    const maxCollections = maxCollectionsRaw ? Number(maxCollectionsRaw) : TOP_TARGETS_DEFAULT_MAX_COLLECTIONS;
+    const deepOrganizationLookup = topTargetsDeepLookupField.checked;
+    const maxDetailLookupsRaw = topTargetsMaxDetailLookupsField.value.trim();
+    const maxDetailLookups = deepOrganizationLookup
+        ? (maxDetailLookupsRaw ? Number(maxDetailLookupsRaw) : TOP_TARGETS_DEFAULT_DEEP_LOOKUPS)
+        : 0;
+    const estimate = buildTopTargetsRequestEstimate(
+        maxCollections,
+        deepOrganizationLookup,
+        maxDetailLookups,
+    );
+
+    const shouldRun = window.confirm(
+        `Estimated API requests before running:\n` +
+        `${estimate.searchRequests} Intelligence Search request(s)\n` +
+        `${estimate.detailLookups} collection detail lookup(s)\n` +
+        `${estimate.totalRequests} total request(s)\n\n` +
+        `Max collections: ${estimate.maxCollections}`,
+    );
+    if (!shouldRun) {
+        updateStatus("Idle", "idle");
+        return;
+    }
+
+    setTopTargetsLoadingState(true);
+    setDownloadState(false);
+    lastGeneratedReport = "";
 
     try {
         const response = await fetch("/explore/top-targets", {
@@ -1249,6 +1312,8 @@ async function runTopTargetsRanking() {
                 end_year: endYear,
                 top_n: topN,
                 max_collections: maxCollections,
+                deep_organization_lookup: deepOrganizationLookup,
+                max_detail_lookups: maxDetailLookups,
             }),
         });
 
@@ -1409,12 +1474,14 @@ dtmMonitorsButton.addEventListener("click", testDtmMonitors);
 dtmAlertsButton.addEventListener("click", testDtmAlerts);
 intelligenceSearchButton.addEventListener("click", searchGtiIntelligence);
 topTargetsButton.addEventListener("click", runTopTargetsRanking);
+topTargetsDeepLookupField.addEventListener("change", syncTopTargetsDeepLookupControls);
 intelligencePresetButtons.forEach((button) => {
     button.addEventListener("click", applyIntelligenceQueryPreset);
 });
 reportOutput.addEventListener("click", handleReportOutputClick);
 reportForm.addEventListener("submit", generateReport);
 setDownloadState(false);
+syncTopTargetsDeepLookupControls();
 syncTargetRequirement();
 reportForm.dataset.initialized = "true"; // enable field animations after initial render
 
