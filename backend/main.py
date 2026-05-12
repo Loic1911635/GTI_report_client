@@ -130,10 +130,12 @@ class TopTargetsRequest(BaseModel):
     api_key: str = Field(..., description="GTI or VirusTotal API key.")
     start_year: int = Field(default=2024, ge=2018, description="Start year of the analysis period.")
     end_year: int | None = Field(default=None, description="End year (inclusive). Defaults to start_year.")
+    month: int | None = Field(default=None, ge=1, le=12, description="Optional month for a single-month ranking.")
     top_n: int = Field(default=10, ge=1, le=50, description="Number of top results to return.")
-    max_collections: int | None = Field(default=None, ge=1, description="Stop after this many collections. None = paginate until exhausted.")
+    max_collections: int = Field(default=1000, ge=1, description="Stop after this many collections.")
+    selected_rankings: list[str] = Field(default_factory=lambda: ["targeted_industries", "targeted_organizations"], description="Ranking sections to compute from preview fields.")
     deep_organization_lookup: bool = Field(default=False, description="Enable bounded per-collection organization detail lookups.")
-    max_detail_lookups: int | None = Field(default=None, ge=0, le=MAX_TOP_TARGETS_DETAIL_LOOKUPS, description="Maximum per-collection detail lookups when deep organization lookup is enabled.")
+    max_detail_lookups: int = Field(default=0, ge=0, le=MAX_TOP_TARGETS_DETAIL_LOOKUPS, description="Maximum per-collection detail lookups when deep organization lookup is enabled.")
 
 
 class TopTargetsResponse(BaseModel):
@@ -141,21 +143,29 @@ class TopTargetsResponse(BaseModel):
 
     status: str
     period: str
+    month: int | None = None
+    selected_rankings: list[str] = Field(default_factory=list)
     collections_analyzed: int
     collections_seen: int = 0
     collections_with_targeted_industries: int = 0
     collections_without_targeted_industries: int = 0
     unique_industries_count: int = 0
     pages_fetched: int = 0
-    max_collections: int | None = None
+    max_collections: int = 1000
     deep_organization_lookup: bool = False
     max_detail_lookups: int = 0
     api_request_estimate: dict[str, Any] = Field(default_factory=dict)
+    estimated_api_requests: int = 0
+    actual_search_requests: int = 0
+    fields_coverage: dict[str, int] = Field(default_factory=dict)
+    debug_attribute_keys_frequency: dict[str, int] = Field(default_factory=dict)
+    debug_sample_collection_fields: list[dict[str, Any]] = Field(default_factory=list)
     company_detail_lookups_attempted: int
     company_detail_lookups_succeeded: int
     top_industries: list[dict[str, Any]]
     top_companies: list[dict[str, Any]]
     top_companies_status: str = "ok"
+    rankings: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     collection_preview_fields: list[dict[str, Any]] = Field(default_factory=list)
     query_used: str
     methodology: str
@@ -234,21 +244,29 @@ class CollectionDetailsResponse(BaseModel):
 def serve_index() -> FileResponse:
     """Serve the single-page frontend from the FastAPI backend."""
 
-    return FileResponse(INDEX_FILE)
+    return FileResponse(INDEX_FILE, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/app.js", include_in_schema=False)
 def serve_app_js() -> FileResponse:
     """Serve the frontend JavaScript bundle for the MVP page."""
 
-    return FileResponse(APP_JS_FILE, media_type="application/javascript")
+    return FileResponse(
+        APP_JS_FILE,
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/style.css", include_in_schema=False)
 def serve_style_css() -> FileResponse:
     """Serve the frontend stylesheet for the MVP page."""
 
-    return FileResponse(STYLE_CSS_FILE, media_type="text/css")
+    return FileResponse(
+        STYLE_CSS_FILE,
+        media_type="text/css",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/generate-report", response_model=GenerateReportResponse)
@@ -510,24 +528,33 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             api_key=request.api_key,
             start_year=request.start_year,
             end_year=request.end_year,
+            month=request.month,
             top_n=request.top_n,
             max_collections=request.max_collections,
+            selected_rankings=request.selected_rankings,
             deep_organization_lookup=request.deep_organization_lookup,
             max_detail_lookups=request.max_detail_lookups,
         )
         return TopTargetsResponse(
             status="success",
             period=str(result["period"]),
+            month=result.get("month"),
+            selected_rankings=result.get("selected_rankings", []),
             collections_analyzed=int(result["collections_analyzed"]),
             collections_seen=int(result.get("collections_seen", 0)),
             collections_with_targeted_industries=int(result.get("collections_with_targeted_industries", 0)),
             collections_without_targeted_industries=int(result.get("collections_without_targeted_industries", 0)),
             unique_industries_count=int(result.get("unique_industries_count", 0)),
             pages_fetched=int(result.get("pages_fetched", 0)),
-            max_collections=result.get("max_collections"),
+            max_collections=int(result.get("max_collections", 1000)),
             deep_organization_lookup=bool(result.get("deep_organization_lookup", False)),
             max_detail_lookups=int(result.get("max_detail_lookups", 0)),
             api_request_estimate=result.get("api_request_estimate", {}),
+            estimated_api_requests=int(result.get("estimated_api_requests", 0)),
+            actual_search_requests=int(result.get("actual_search_requests", 0)),
+            fields_coverage=result.get("fields_coverage", {}),
+            debug_attribute_keys_frequency=result.get("debug_attribute_keys_frequency", {}),
+            debug_sample_collection_fields=result.get("debug_sample_collection_fields", []),
             company_detail_lookups_attempted=int(
                 result["company_detail_lookups_attempted"]
             ),
@@ -537,6 +564,7 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             top_industries=result["top_industries"],
             top_companies=result["top_companies"],
             top_companies_status=str(result.get("top_companies_status", "ok")),
+            rankings=result.get("rankings", {}),
             collection_preview_fields=result.get("collection_preview_fields", []),
             query_used=str(result["query_used"]),
             methodology=str(result["methodology"]),

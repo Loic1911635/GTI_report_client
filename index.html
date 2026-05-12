@@ -104,8 +104,22 @@
                             <input id="top_targets_start_year" name="top_targets_start_year" type="number" value="2024" min="2018" max="2100">
                         </label>
                         <label class="field">
-                            <span>End Year <small>(optional)</small></span>
-                            <input id="top_targets_end_year" name="top_targets_end_year" type="number" placeholder="Same as start" min="2018" max="2100">
+                            <span>Month <small>(optional)</small></span>
+                            <select id="top_targets_month" name="top_targets_month">
+                                <option value="">Full year</option>
+                                <option value="1">January</option>
+                                <option value="2">February</option>
+                                <option value="3">March</option>
+                                <option value="4">April</option>
+                                <option value="5">May</option>
+                                <option value="6">June</option>
+                                <option value="7">July</option>
+                                <option value="8">August</option>
+                                <option value="9">September</option>
+                                <option value="10">October</option>
+                                <option value="11">November</option>
+                                <option value="12">December</option>
+                            </select>
                         </label>
                     </div>
                     <div class="field-row">
@@ -114,13 +128,45 @@
                             <input id="top_targets_top_n" name="top_targets_top_n" type="number" value="10" min="1" max="50">
                         </label>
                         <label class="field">
-                            <span>Max collections <small>(blank = all)</small></span>
-                            <input id="top_targets_max_collections" name="top_targets_max_collections" type="number" placeholder="unlimited" min="1">
+                            <span>Max collections</span>
+                            <input id="top_targets_max_collections" name="top_targets_max_collections" type="number" value="1000" min="1">
+                        </label>
+                    </div>
+                    <div class="field ranking-options">
+                        <span>Rankings to compute</span>
+                        <label class="checkbox-option">
+                            <input name="top_targets_rankings" type="checkbox" value="targeted_industries" checked>
+                            <span>Top targeted industries</span>
+                        </label>
+                        <label class="checkbox-option">
+                            <input name="top_targets_rankings" type="checkbox" value="targeted_regions" checked>
+                            <span>Top targeted regions</span>
+                        </label>
+                        <label class="checkbox-option">
+                            <input name="top_targets_rankings" type="checkbox" value="source_regions" checked>
+                            <span>Top source regions</span>
+                        </label>
+                        <label class="checkbox-option">
+                            <input name="top_targets_rankings" type="checkbox" value="tags" checked>
+                            <span>Top tags / themes</span>
+                        </label>
+                        <label class="checkbox-option">
+                            <input name="top_targets_rankings" type="checkbox" value="collection_type" checked>
+                            <span>Collection type distribution</span>
+                        </label>
+                        <label class="checkbox-option">
+                            <input name="top_targets_rankings" type="checkbox" value="timeline" checked>
+                            <span>Monthly timeline</span>
+                        </label>
+                        <label class="checkbox-option">
+                            <input name="top_targets_rankings" type="checkbox" value="targeted_organizations" checked>
+                            <span>Top targeted organizations</span>
                         </label>
                     </div>
                     <div class="field-row">
                         <div class="field checkbox-field">
                             <span>Organizations</span>
+                            <p class="field-help">Preview-only mode: uses only fields returned by GTI Intelligence Search. This avoids expensive per-collection detail calls.</p>
                             <label class="checkbox-option" for="top_targets_deep_lookup">
                                 <input id="top_targets_deep_lookup" name="top_targets_deep_lookup" type="checkbox">
                                 <span>Deep organization lookup</span>
@@ -128,9 +174,11 @@
                         </div>
                         <label class="field">
                             <span>Max detail lookups</span>
-                            <input id="top_targets_max_detail_lookups" name="top_targets_max_detail_lookups" type="number" value="25" min="0" max="50" disabled>
+                            <input id="top_targets_max_detail_lookups" name="top_targets_max_detail_lookups" type="number" value="0" min="0" max="50" disabled>
                         </label>
                     </div>
+                    <p class="field-help">Experimental: only works when organization fields are present in GTI search preview results.</p>
+                    <div id="top-targets-estimate" class="estimate-panel" aria-live="polite"></div>
                 </div>
 
                 <!-- Company / DTM fields -->
@@ -274,13 +322,13 @@
                         <div class="stats-chart-panel">
                             <h3 class="stats-chart-title">Top 10 Industries</h3>
                             <div id="industries-chart" class="chart-area">
-                                <p><em>Enter your API key to load data.</em></p>
+                                <p><em>Run Top Rankings to populate this tab.</em></p>
                             </div>
                         </div>
                         <div class="stats-chart-panel">
                             <h3 class="stats-chart-title">Top 10 Companies / Organizations</h3>
                             <div id="companies-chart" class="chart-area">
-                                <p><em>Enter your API key to load data.</em></p>
+                                <p><em>Run Top Rankings to populate this tab.</em></p>
                             </div>
                             <div id="companies-source-badge" class="source-badge-area"></div>
                         </div>

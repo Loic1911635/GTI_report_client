@@ -37,11 +37,12 @@ const topTargetsFields = document.getElementById("top-targets-fields");
 const topTargetsActions = document.getElementById("top-targets-actions");
 const topTargetsButton = document.getElementById("top-targets-button");
 const topTargetsStartYearField = document.getElementById("top_targets_start_year");
-const topTargetsEndYearField = document.getElementById("top_targets_end_year");
+const topTargetsMonthField = document.getElementById("top_targets_month");
 const topTargetsTopNField = document.getElementById("top_targets_top_n");
 const topTargetsMaxCollectionsField = document.getElementById("top_targets_max_collections");
 const topTargetsDeepLookupField = document.getElementById("top_targets_deep_lookup");
 const topTargetsMaxDetailLookupsField = document.getElementById("top_targets_max_detail_lookups");
+const topTargetsEstimatePanel = document.getElementById("top-targets-estimate");
 const statsYearField = document.getElementById("stats_year");
 const statsTargetField = document.getElementById("stats_target");
 const industriesChartEl = document.getElementById("industries-chart");
@@ -59,8 +60,35 @@ const COMPANY_EXPOSURE_DTM = "Company Exposure / DTM";
 const GTI_INTELLIGENCE_SEARCH = "GTI Intelligence Search";
 const TOP_TARGETS_RANKING = "Top Targets Ranking";
 const TOP_TARGETS_SEARCH_PAGE_SIZE = 40;
-const TOP_TARGETS_DEFAULT_DEEP_LOOKUPS = 25;
+const TOP_TARGETS_DEFAULT_MAX_COLLECTIONS = 1000;
+const TOP_TARGETS_DEFAULT_DEEP_LOOKUPS = 0;
 const TOP_TARGETS_MAX_DETAIL_LOOKUPS = 50;
+
+const TOP_TARGETS_MONTH_NAMES = [
+    "",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+const TOP_TARGETS_RANKING_LABELS = {
+    targeted_industries: "Top Targeted Industries",
+    targeted_regions: "Top Targeted Regions",
+    source_regions: "Top Source Regions",
+    tags: "Top Tags / Themes",
+    collection_type: "Collection Type Distribution",
+    timeline: "Timeline",
+    targeted_organizations: "Top Targeted Organizations",
+};
 
 const MODE_META = {
     [IOC_ENRICHMENT]: {
@@ -276,17 +304,24 @@ function setTopTargetsLoadingState(isLoading) {
 }
 
 function syncTopTargetsDeepLookupControls() {
+    if (!topTargetsDeepLookupField || !topTargetsMaxDetailLookupsField) {
+        return;
+    }
     topTargetsMaxDetailLookupsField.disabled = !topTargetsDeepLookupField.checked;
     if (topTargetsDeepLookupField.checked && !topTargetsMaxDetailLookupsField.value.trim()) {
         topTargetsMaxDetailLookupsField.value = String(TOP_TARGETS_DEFAULT_DEEP_LOOKUPS);
     }
+    if (!topTargetsDeepLookupField.checked) {
+        topTargetsMaxDetailLookupsField.value = "0";
+    }
+    updateTopTargetsEstimatePanel();
 }
 
 function buildTopTargetsRequestEstimate(maxCollections, deepLookup, maxDetailLookups) {
-    const hasCollectionLimit = maxCollections !== null && maxCollections !== undefined && String(maxCollections).trim() !== "";
-    const collectionLimit = hasCollectionLimit
-        ? Math.max(Number(maxCollections) || 1, 1)
-        : null;
+    const collectionLimit = Math.max(
+        Number(maxCollections) || TOP_TARGETS_DEFAULT_MAX_COLLECTIONS,
+        1,
+    );
     const detailLookups = deepLookup
         ? Math.min(
             Math.max(Number(maxDetailLookups) || TOP_TARGETS_DEFAULT_DEEP_LOOKUPS, 0),
@@ -303,6 +338,53 @@ function buildTopTargetsRequestEstimate(maxCollections, deepLookup, maxDetailLoo
         detailLookups,
         totalRequests: searchRequests === null ? null : searchRequests + detailLookups,
     };
+}
+
+function getTopTargetsPeriodLabel() {
+    const year = Number(topTargetsStartYearField?.value || 2024);
+    const month = Number(topTargetsMonthField?.value || 0);
+    return month ? `${TOP_TARGETS_MONTH_NAMES[month]} ${year}` : String(year);
+}
+
+function getSelectedTopTargetRankings() {
+    return Array.from(
+        document.querySelectorAll('input[name="top_targets_rankings"]:checked'),
+        (input) => input.value,
+    );
+}
+
+function updateTopTargetsEstimatePanel() {
+    if (
+        !topTargetsEstimatePanel
+        || !topTargetsMaxCollectionsField
+        || !topTargetsDeepLookupField
+        || !topTargetsMaxDetailLookupsField
+    ) {
+        return;
+    }
+
+    const maxCollections = Number(topTargetsMaxCollectionsField.value || TOP_TARGETS_DEFAULT_MAX_COLLECTIONS);
+    const deepLookup = topTargetsDeepLookupField.checked;
+    const maxDetailLookups = deepLookup
+        ? Number(topTargetsMaxDetailLookupsField.value || 0)
+        : 0;
+    const estimate = buildTopTargetsRequestEstimate(maxCollections, deepLookup, maxDetailLookups);
+    const warningHtml = estimate.totalRequests > 100
+        ? `<p class="estimate-warning">Warning: this may consume a significant number of GTI API requests.</p>`
+        : "";
+
+    topTargetsEstimatePanel.innerHTML = `
+        <strong>Execution estimate:</strong>
+        <ul>
+            <li>Period: ${escapeHtml(getTopTargetsPeriodLabel())}</li>
+            <li>Max collections: ${escapeHtml(String(estimate.maxCollections))}</li>
+            <li>Search page size: ${escapeHtml(String(TOP_TARGETS_SEARCH_PAGE_SIZE))}</li>
+            <li>Estimated search pages: ${escapeHtml(String(estimate.searchRequests))}</li>
+            <li>Deep collection lookups: ${deepLookup ? escapeHtml(String(estimate.detailLookups)) : "disabled"}</li>
+            <li>Estimated API requests: ~${escapeHtml(String(estimate.totalRequests))}</li>
+        </ul>
+        ${warningHtml}
+    `;
 }
 
 function getSelectedSections() {
@@ -1168,9 +1250,13 @@ async function testDtmAlerts() {
     }
 }
 
-function renderRankingTable(items, countLabel) {
+function renderRankingTable(
+    items,
+    countLabel,
+    emptyMessage = "Field not present in GTI Intelligence Search preview for this sample",
+) {
     if (!Array.isArray(items) || items.length === 0) {
-        return "<p><em>No data returned — the API may not have returned targeted information for this period.</em></p>";
+        return `<p><em>${escapeHtml(emptyMessage)}</em></p>`;
     }
 
     const maxCount = Math.max(
@@ -1210,14 +1296,79 @@ function renderRankingTable(items, countLabel) {
     `;
 }
 
+function normalizeTopTargetsResponse(responseData, requestedRankings = []) {
+    const normalized = { ...responseData };
+    const rankings = (
+        responseData.rankings
+        && typeof responseData.rankings === "object"
+        && !Array.isArray(responseData.rankings)
+    )
+        ? { ...responseData.rankings }
+        : {};
+
+    if (!rankings.targeted_industries && Array.isArray(responseData.top_industries)) {
+        rankings.targeted_industries = responseData.top_industries;
+    }
+    if (!rankings.targeted_organizations && Array.isArray(responseData.top_companies)) {
+        rankings.targeted_organizations = responseData.top_companies;
+    }
+
+    const selectedRankings = Array.isArray(responseData.selected_rankings)
+        && responseData.selected_rankings.length > 0
+            ? responseData.selected_rankings
+            : requestedRankings.length > 0
+                ? requestedRankings
+                : Object.keys(rankings);
+
+    selectedRankings.forEach((rankingKey) => {
+        if (!Array.isArray(rankings[rankingKey])) {
+            rankings[rankingKey] = [];
+        }
+    });
+
+    normalized.rankings = rankings;
+    normalized.selected_rankings = selectedRankings;
+    normalized.top_industries = Array.isArray(responseData.top_industries)
+        ? responseData.top_industries
+        : rankings.targeted_industries || [];
+    normalized.top_companies = Array.isArray(responseData.top_companies)
+        ? responseData.top_companies
+        : rankings.targeted_organizations || [];
+
+    return normalized;
+}
+
+function renderSelectedRankingSections(responseData) {
+    const rankings = responseData.rankings || {};
+    const selectedRankings = Array.isArray(responseData.selected_rankings)
+        ? responseData.selected_rankings
+        : Object.keys(rankings);
+
+    return selectedRankings.map((rankingKey) => {
+        const label = TOP_TARGETS_RANKING_LABELS[rankingKey] || rankingKey;
+        const items = rankings[rankingKey] || [];
+        const countLabel = rankingKey === "timeline" ? "collections" : "collections";
+        const emptyHtml = rankingKey === "targeted_organizations"
+            ? "<p><em>Not enough organization data in preview fields.</em></p>"
+            : renderRankingTable(items, countLabel);
+        const tableHtml = rankingKey === "targeted_organizations" && responseData.top_companies_status === "not enough data"
+            ? emptyHtml
+            : renderRankingTable(items, countLabel);
+
+        return `
+            <h2>${escapeHtml(label)}</h2>
+            ${tableHtml}
+        `;
+    }).join("");
+}
+
 function renderTopTargetsResult(responseData) {
-    const industriesHtml = renderRankingTable(responseData.top_industries, "collections");
-    const companiesHtml = responseData.top_companies_status === "not enough data"
-        ? "<p><em>not enough data: no organization preview fields were present. Enable Deep organization lookup to use bounded per-collection detail lookups.</em></p>"
-        : renderRankingTable(responseData.top_companies, "collections");
     const detailLookupsAttempted = Number(responseData.company_detail_lookups_attempted || 0);
     const detailLookupsSucceeded = Number(responseData.company_detail_lookups_succeeded || 0);
     const estimate = responseData.api_request_estimate || {};
+    const fieldsCoverage = responseData.fields_coverage || {};
+    const collectionsAnalyzed = Number(responseData.collections_analyzed || 0);
+    const rankingSectionsHtml = renderSelectedRankingSections(responseData);
     const detailLookupHtml = detailLookupsAttempted > 0
         ? `
         <p>
@@ -1239,28 +1390,46 @@ function renderTopTargetsResult(responseData) {
             <summary>Diagnostics</summary>
             <ul>
                 <li><strong>Pages fetched:</strong> ${escapeHtml(String(responseData.pages_fetched ?? 0))}</li>
+                <li><strong>Actual search requests:</strong> ${escapeHtml(String(responseData.actual_search_requests ?? responseData.pages_fetched ?? 0))}</li>
                 <li><strong>Collections seen:</strong> ${escapeHtml(String(responseData.collections_seen ?? 0))}</li>
                 <li><strong>Max collections:</strong> ${escapeHtml(String(responseData.max_collections ?? 0))}</li>
                 <li><strong>Deep organization lookup:</strong> ${escapeHtml(String(Boolean(responseData.deep_organization_lookup)))}</li>
-                <li><strong>Request estimate:</strong> ${escapeHtml(String(estimate.total_requests ?? 0))} total (${escapeHtml(String(estimate.search_requests ?? 0))} search + ${escapeHtml(String(estimate.detail_lookup_requests ?? 0))} detail)</li>
-                <li><strong>With targeted_industries:</strong> ${escapeHtml(String(responseData.collections_with_targeted_industries ?? 0))}</li>
-                <li><strong>Without targeted_industries:</strong> ${escapeHtml(String(responseData.collections_without_targeted_industries ?? 0))}</li>
-                <li><strong>Unique industries found:</strong> ${escapeHtml(String(responseData.unique_industries_count ?? 0))}</li>
+                <li><strong>Estimated API requests:</strong> ${escapeHtml(String(responseData.estimated_api_requests ?? estimate.estimated_total_requests ?? 0))}</li>
+                <li><strong>Targeted industries:</strong> ${escapeHtml(String(fieldsCoverage.targeted_industries ?? 0))} / ${escapeHtml(String(collectionsAnalyzed))} collections</li>
+                <li><strong>Targeted regions:</strong> ${escapeHtml(String(fieldsCoverage.targeted_regions ?? 0))} / ${escapeHtml(String(collectionsAnalyzed))} collections</li>
+                <li><strong>Source regions:</strong> ${escapeHtml(String(fieldsCoverage.source_regions ?? 0))} / ${escapeHtml(String(collectionsAnalyzed))} collections</li>
+                <li><strong>Tags/themes:</strong> ${escapeHtml(String(fieldsCoverage.tags ?? 0))} / ${escapeHtml(String(collectionsAnalyzed))} collections</li>
+                <li><strong>Collection type:</strong> ${escapeHtml(String(fieldsCoverage.collection_type ?? 0))} / ${escapeHtml(String(collectionsAnalyzed))} collections</li>
+                <li><strong>Timeline:</strong> ${escapeHtml(String(fieldsCoverage.timeline ?? 0))} / ${escapeHtml(String(collectionsAnalyzed))} collections</li>
+                <li><strong>Targeted organizations:</strong> ${escapeHtml(String(fieldsCoverage.targeted_organizations ?? 0))} / ${escapeHtml(String(collectionsAnalyzed))} collections</li>
             </ul>
         </details>
         ${detailLookupHtml}
 
-        <h2>Top ${escapeHtml(String(responseData.top_industries?.length || 0))} Most Targeted Industries</h2>
-        ${industriesHtml}
-
-        <h2>Top ${escapeHtml(String(responseData.top_companies?.length || 0))} Most Targeted Companies / Organizations <small style="font-size:0.7em;opacity:0.6">(counted by distinct collections)</small></h2>
-        ${companiesHtml}
+        ${rankingSectionsHtml}
 
         <div class="methodology-note">
             <strong>Methodology:</strong> ${escapeHtml(String(responseData.methodology || ""))}
         </div>
-        ${renderRawJsonDetails(responseData)}
     `;
+}
+
+function renderLiveRankingsFromTopTargets(responseData) {
+    const rankings = responseData.rankings || {};
+    const selectedRankings = Array.isArray(responseData.selected_rankings)
+        ? responseData.selected_rankings
+        : Object.keys(rankings);
+
+    industriesChartEl.innerHTML = selectedRankings.includes("targeted_industries")
+        ? renderRankingTable(rankings.targeted_industries || [], "collections")
+        : "<p><em>No industries ranking is available for this run.</em></p>";
+
+    companiesChartEl.innerHTML = !selectedRankings.includes("targeted_organizations")
+        ? "<p><em>No organizations ranking is available for this run.</em></p>"
+        : responseData.top_companies_status === "not enough data"
+            ? "<p><em>Not enough organization data in preview fields.</em></p>"
+            : renderRankingTable(rankings.targeted_organizations || [], "collections");
+    companiesSourceBadgeEl.innerHTML = '<span class="badge source-badge">preview-only</span>';
 }
 
 async function runTopTargetsRanking() {
@@ -1271,11 +1440,17 @@ async function runTopTargetsRanking() {
     clearMessage();
 
     const startYear = Number(topTargetsStartYearField.value || 2024);
-    const endYearRaw = topTargetsEndYearField.value.trim();
-    const endYear = endYearRaw ? Number(endYearRaw) : null;
+    const monthRaw = topTargetsMonthField?.value || "";
+    const month = monthRaw ? Number(monthRaw) : null;
     const topN = Number(topTargetsTopNField.value || 10);
     const maxCollectionsRaw = topTargetsMaxCollectionsField.value.trim();
-    const maxCollections = maxCollectionsRaw ? Number(maxCollectionsRaw) : null;
+    const maxCollections = maxCollectionsRaw ? Number(maxCollectionsRaw) : TOP_TARGETS_DEFAULT_MAX_COLLECTIONS;
+    const selectedRankings = getSelectedTopTargetRankings();
+    if (selectedRankings.length === 0) {
+        updateStatus("Error", "error");
+        showMessage("Select at least one ranking to compute.", "error");
+        return;
+    }
     const deepOrganizationLookup = topTargetsDeepLookupField.checked;
     const maxDetailLookupsRaw = topTargetsMaxDetailLookupsField.value.trim();
     const maxDetailLookups = deepOrganizationLookup
@@ -1289,10 +1464,11 @@ async function runTopTargetsRanking() {
 
     const shouldRun = window.confirm(
         `Estimated API requests before running:\n` +
-        `${estimate.searchRequests ?? "unbounded"} Intelligence Search request(s)\n` +
+        `${estimate.searchRequests} Intelligence Search request(s)\n` +
         `${estimate.detailLookups} collection detail lookup(s)\n` +
-        `${estimate.totalRequests ?? "unbounded"} total request(s)\n\n` +
-        `Max collections: ${estimate.maxCollections ?? "unlimited"}`,
+        `${estimate.totalRequests} total request(s)\n\n` +
+        `Period: ${getTopTargetsPeriodLabel()}\n` +
+        `Max collections: ${estimate.maxCollections}`,
     );
     if (!shouldRun) {
         updateStatus("Idle", "idle");
@@ -1310,9 +1486,10 @@ async function runTopTargetsRanking() {
             body: JSON.stringify({
                 api_key: apiKeyField.value.trim(),
                 start_year: startYear,
-                end_year: endYear,
+                month,
                 top_n: topN,
                 max_collections: maxCollections,
+                selected_rankings: selectedRankings,
                 deep_organization_lookup: deepOrganizationLookup,
                 max_detail_lookups: maxDetailLookups,
             }),
@@ -1323,15 +1500,20 @@ async function runTopTargetsRanking() {
             throw new Error(responseData.detail || "The backend returned an error.");
         }
 
-        renderTopTargetsResult(responseData);
-        switchToTab("report");
-        rawJsonOutput.textContent = JSON.stringify(responseData, null, 2);
+        const normalizedResponseData = normalizeTopTargetsResponse(
+            responseData,
+            selectedRankings,
+        );
 
-        const industryCount = responseData.top_industries?.length || 0;
-        const companyCount = responseData.top_companies?.length || 0;
+        renderTopTargetsResult(normalizedResponseData);
+        renderLiveRankingsFromTopTargets(normalizedResponseData);
+        switchToTab("report");
+        rawJsonOutput.textContent = JSON.stringify(normalizedResponseData, null, 2);
+
+        const rankingCount = normalizedResponseData.selected_rankings.length;
         updateStatus("Success", "success");
         showMessage(
-            `Ranking complete: ${industryCount} industries and ${companyCount} companies ranked from ${responseData.collections_analyzed} distinct GTI collections (${responseData.period}).`,
+            `Ranking complete: ${rankingCount} ranking section(s) computed from ${normalizedResponseData.collections_analyzed} distinct GTI collections (${normalizedResponseData.period}).`,
             "success",
         );
     } catch (error) {
@@ -1474,8 +1656,18 @@ explorerButton.addEventListener("click", runSelectedExplorer);
 dtmMonitorsButton.addEventListener("click", testDtmMonitors);
 dtmAlertsButton.addEventListener("click", testDtmAlerts);
 intelligenceSearchButton.addEventListener("click", searchGtiIntelligence);
-topTargetsButton.addEventListener("click", runTopTargetsRanking);
-topTargetsDeepLookupField.addEventListener("change", syncTopTargetsDeepLookupControls);
+topTargetsButton?.addEventListener("click", runTopTargetsRanking);
+topTargetsDeepLookupField?.addEventListener("change", syncTopTargetsDeepLookupControls);
+[
+    topTargetsStartYearField,
+    topTargetsMonthField,
+    topTargetsTopNField,
+    topTargetsMaxCollectionsField,
+    topTargetsMaxDetailLookupsField,
+].filter(Boolean).forEach((field) => {
+    field.addEventListener("input", updateTopTargetsEstimatePanel);
+    field.addEventListener("change", updateTopTargetsEstimatePanel);
+});
 intelligencePresetButtons.forEach((button) => {
     button.addEventListener("click", applyIntelligenceQueryPreset);
 });
@@ -1483,6 +1675,7 @@ reportOutput.addEventListener("click", handleReportOutputClick);
 reportForm.addEventListener("submit", generateReport);
 setDownloadState(false);
 syncTopTargetsDeepLookupControls();
+updateTopTargetsEstimatePanel();
 syncTargetRequirement();
 reportForm.dataset.initialized = "true"; // enable field animations after initial render
 
@@ -1542,8 +1735,8 @@ async function fetchCompanies(year, target = "") {
 }
 
 function refreshStats() {
-    const year = Number(statsYearField.value || 2024);
-    const target = statsTargetField.value.trim();
+    const year = Number(statsYearField?.value || 2024);
+    const target = statsTargetField?.value.trim() || "";
     fetchIndustries(year, target);
     fetchCompanies(year, target);
 }
@@ -1553,9 +1746,9 @@ function onStatsInputChange() {
     statsDebounceTimer = setTimeout(refreshStats, 400);
 }
 
-statsYearField.addEventListener("change", onStatsInputChange);
-statsTargetField.addEventListener("input", onStatsInputChange);
-apiKeyField.addEventListener("change", refreshStats);
+statsYearField?.addEventListener("change", onStatsInputChange);
+statsTargetField?.addEventListener("input", onStatsInputChange);
+apiKeyField?.addEventListener("change", refreshStats);
 refreshStats();
 
 // ── Tab switching ──────────────────────────────────────────────────────────

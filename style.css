@@ -171,8 +171,47 @@ body {
     margin-top: 2px;
 }
 
+.field-help {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--text-soft);
+    line-height: 1.4;
+}
+
 .checkbox-field {
     align-content: start;
+}
+
+.ranking-options {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 7px;
+}
+
+.estimate-panel {
+    border: 1px solid rgba(13, 127, 122, 0.18);
+    border-radius: var(--radius-sm);
+    background: rgba(13, 127, 122, 0.05);
+    padding: 10px 12px;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: var(--text);
+}
+
+.estimate-panel strong {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.estimate-panel ul {
+    margin: 0;
+    padding-left: 18px;
+}
+
+.estimate-warning {
+    margin: 7px 0 0;
+    color: #9f4b00;
+    font-weight: 700;
 }
 
 /* ── Mode card ─────────────────────────────────────────── */
@@ -822,6 +861,10 @@ select:focus {
 }
 
 .chart-area { min-height: 60px; }
+
+.live-ranking-section + .live-ranking-section {
+    margin-top: 18px;
+}
 
 .source-badge-area { margin-top: 7px; display: flex; gap: 5px; }
 

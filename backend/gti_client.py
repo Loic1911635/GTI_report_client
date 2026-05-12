@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import calendar
 import re
 from typing import Any
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, quote, urlparse
 
 import requests
@@ -23,8 +25,55 @@ MAX_SAFE_DTM_PAGES = 5
 DEFAULT_INTELLIGENCE_SEARCH_LIMIT = 10
 MAX_INTELLIGENCE_SEARCH_LIMIT = 40
 DEFAULT_TOP_TARGETS_MAX_DETAIL_LOOKUPS = 0
-DEFAULT_TOP_TARGETS_DEEP_DETAIL_LOOKUPS = 25
 MAX_TOP_TARGETS_DETAIL_LOOKUPS = 50
+DEFAULT_TOP_RANKINGS_MAX_COLLECTIONS = 1000
+TOP_RANKING_KEYS = {
+    "targeted_industries",
+    "targeted_regions",
+    "source_regions",
+    "tags",
+    "collection_type",
+    "timeline",
+    "targeted_organizations",
+}
+TOP_RANKING_ORGANIZATION_FIELDS = (
+    "targeted_organizations",
+    "affected_organizations",
+    "victim_organizations",
+    "organizations",
+    "victims",
+    "companies",
+)
+TOP_RANKING_FIELD_ALIASES = {
+    "targeted_industries": (
+        "targeted_industries",
+        "targeted_industry",
+        "targeted_industries_free",
+    ),
+    "targeted_regions": (
+        "targeted_regions",
+        "targeted_region",
+        "targeted_regions_hierarchy",
+    ),
+    "source_regions": (
+        "source_regions",
+        "source_region",
+        "source_regions_hierarchy",
+    ),
+    "tags": (
+        "tags",
+        "tag",
+        "threat_categories",
+        "threat_category",
+        "categories",
+    ),
+    "collection_type": (
+        "collection_type",
+        "collection_subtype",
+        "report_type",
+    ),
+    "targeted_organizations": TOP_RANKING_ORGANIZATION_FIELDS,
+}
 DEFAULT_DTM_MONITOR_PAGE_SIZE = 50
 DEFAULT_DTM_ALERT_PAGE_SIZE = 25
 MAX_DTM_ALERT_PAGE_SIZE = 25
@@ -280,12 +329,109 @@ def get_collection_details(
     }
 
 
+def estimate_top_ranking_requests(
+    max_collections: int,
+    page_size: int = MAX_INTELLIGENCE_SEARCH_LIMIT,
+    deep_lookup: bool = False,
+    max_detail_lookups: int = 0,
+) -> dict[str, Any]:
+    """Estimate GTI API requests for the preview ranking workflow."""
+
+    if max_collections < 1:
+        raise ValueError("max_collections must be >= 1.")
+    if page_size < 1:
+        raise ValueError("page_size must be >= 1.")
+    if max_detail_lookups < 0:
+        raise ValueError("max_detail_lookups must be >= 0.")
+
+    effective_detail_lookups = (
+        min(max_detail_lookups, MAX_TOP_TARGETS_DETAIL_LOOKUPS)
+        if deep_lookup
+        else 0
+    )
+    estimated_search_pages = (max_collections + page_size - 1) // page_size
+
+    return {
+        "page_size": page_size,
+        "max_collections": max_collections,
+        "estimated_search_pages": estimated_search_pages,
+        "search_requests": estimated_search_pages,
+        "deep_lookup_enabled": deep_lookup,
+        "max_detail_lookups": effective_detail_lookups,
+        "detail_lookup_requests": effective_detail_lookups,
+        "estimated_total_requests": estimated_search_pages + effective_detail_lookups,
+        "total_requests": estimated_search_pages + effective_detail_lookups,
+    }
+
+
+def _build_top_targets_date_filter(
+    year: int,
+    month: int | None = None,
+) -> tuple[str, str]:
+    """Return GTI creation_date filters and a readable period label."""
+
+    if year < 2018:
+        raise ValueError("year must be >= 2018.")
+    if month is not None and (month < 1 or month > 12):
+        raise ValueError("month must be between 1 and 12.")
+
+    if month is None:
+        return (
+            f"creation_date:{year}-01-01+ creation_date:{year}-12-31-",
+            str(year),
+        )
+
+    last_day = calendar.monthrange(year, month)[1]
+    month_name = calendar.month_name[month]
+    return (
+        f"creation_date:{year}-{month:02d}-01+ "
+        f"creation_date:{year}-{month:02d}-{last_day:02d}-",
+        f"{month_name} {year}",
+    )
+
+
+def _get_first_field(item: dict[str, Any], aliases: tuple[str, ...]) -> Any:
+    """Return the first usable field from top-level item data or attributes."""
+
+    attributes = item.get("attributes", {})
+    normalized_attributes = attributes if isinstance(attributes, dict) else {}
+
+    for alias in aliases:
+        if alias in item and _has_usable_field_value(item.get(alias)):
+            return item.get(alias)
+        if alias in normalized_attributes and _has_usable_field_value(
+            normalized_attributes.get(alias)
+        ):
+            return normalized_attributes.get(alias)
+
+    return None
+
+
+def _has_usable_field_value(value: Any) -> bool:
+    """Return True when a field can plausibly contain ranking data."""
+
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (int, float, bool)):
+        return True
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_usable_field_value(item) for item in value)
+    if isinstance(value, dict):
+        return any(_has_usable_field_value(item) for item in value.values())
+
+    return bool(value)
+
+
 def aggregate_top_targets(
     api_key: str,
     start_year: int = 2024,
     end_year: int | None = None,
+    month: int | None = None,
     top_n: int = 10,
-    max_collections: int | None = None,
+    max_collections: int = DEFAULT_TOP_RANKINGS_MAX_COLLECTIONS,
+    selected_rankings: list[str] | None = None,
     deep_organization_lookup: bool = False,
     max_detail_lookups: int | None = None,
 ) -> dict[str, Any]:
@@ -304,21 +450,28 @@ def aggregate_top_targets(
         raise ValueError("A GTI/VirusTotal API key is required for top targets analysis.")
 
     effective_end_year = start_year if end_year is None else end_year
+    if month is not None and end_year is not None and end_year != start_year:
+        raise ValueError("month selection cannot be combined with a multi-year range.")
     if effective_end_year < start_year:
         raise ValueError("end_year must be >= start_year.")
 
     effective_max_collections = max_collections
-    if effective_max_collections is not None and effective_max_collections < 1:
+    if effective_max_collections < 1:
         raise ValueError("max_collections must be >= 1.")
 
-    if max_detail_lookups is None:
-        effective_max_detail_lookups = (
-            DEFAULT_TOP_TARGETS_DEEP_DETAIL_LOOKUPS
-            if deep_organization_lookup
-            else DEFAULT_TOP_TARGETS_MAX_DETAIL_LOOKUPS
-        )
-    else:
-        effective_max_detail_lookups = max_detail_lookups
+    normalized_rankings = [
+        ranking
+        for ranking in (selected_rankings or ["targeted_industries", "targeted_organizations"])
+        if ranking in TOP_RANKING_KEYS
+    ]
+    if not normalized_rankings:
+        raise ValueError("At least one ranking must be selected.")
+
+    effective_max_detail_lookups = (
+        DEFAULT_TOP_TARGETS_MAX_DETAIL_LOOKUPS
+        if max_detail_lookups is None
+        else max_detail_lookups
+    )
 
     if effective_max_detail_lookups < 0:
         raise ValueError("max_detail_lookups must be >= 0.")
@@ -329,42 +482,43 @@ def aggregate_top_targets(
         MAX_TOP_TARGETS_DETAIL_LOOKUPS,
     )
 
-    date_query = f"creation_date:{start_year}-01-01+ creation_date:{effective_end_year}-12-31-"
+    if month is None and effective_end_year != start_year:
+        date_query = (
+            f"creation_date:{start_year}-01-01+ "
+            f"creation_date:{effective_end_year}-12-31-"
+        )
+        period_label = f"{start_year}-{effective_end_year}"
+    else:
+        date_query, period_label = _build_top_targets_date_filter(start_year, month)
     query = f"entity:collection {date_query}"
-    estimated_search_requests = (
-        None
-        if effective_max_collections is None
-        else (effective_max_collections + MAX_INTELLIGENCE_SEARCH_LIMIT - 1)
-        // MAX_INTELLIGENCE_SEARCH_LIMIT
+    api_request_estimate = estimate_top_ranking_requests(
+        max_collections=effective_max_collections,
+        page_size=MAX_INTELLIGENCE_SEARCH_LIMIT,
+        deep_lookup=deep_organization_lookup,
+        max_detail_lookups=effective_max_detail_lookups,
     )
-    api_request_estimate = {
-        "max_collections": effective_max_collections,
-        "search_requests": estimated_search_requests,
-        "detail_lookup_requests": effective_max_detail_lookups,
-        "total_requests": (
-            None
-            if estimated_search_requests is None
-            else estimated_search_requests + effective_max_detail_lookups
-        ),
-    }
 
-    industry_counter: dict[str, int] = {}
-    industry_display_names: dict[str, str] = {}
-    company_counter: dict[str, int] = {}
-    company_display_names: dict[str, str] = {}
+    counters: dict[str, dict[str, int]] = {key: {} for key in normalized_rankings}
+    display_names: dict[str, dict[str, str]] = {key: {} for key in normalized_rankings}
     collections_analyzed: list[dict[str, Any]] = []
     collections_requiring_company_details: list[dict[str, Any]] = []
     seen_collection_ids: set[str] = set()
-    collections_with_industries = 0
-    collections_without_industries = 0
+    fields_coverage = {
+        "targeted_industries": 0,
+        "targeted_regions": 0,
+        "source_regions": 0,
+        "tags": 0,
+        "collection_type": 0,
+        "targeted_organizations": 0,
+        "timeline": 0,
+    }
+    debug_attribute_keys_frequency: dict[str, int] = {}
+    debug_sample_collection_fields: list[dict[str, Any]] = []
     pages_fetched = 0
     cursor: str | None = None
 
     while True:
-        if (
-            effective_max_collections is not None
-            and len(seen_collection_ids) >= effective_max_collections
-        ):
+        if len(seen_collection_ids) >= effective_max_collections:
             break
 
         search_result = intelligence_search(
@@ -381,10 +535,7 @@ def aggregate_top_targets(
 
         items = search_result.get("simplified_preview", [])
         for item in items:
-            if (
-                effective_max_collections is not None
-                and len(seen_collection_ids) >= effective_max_collections
-            ):
+            if len(seen_collection_ids) >= effective_max_collections:
                 break
 
             coll_id = _stringify_value(item.get("id")) or ""
@@ -392,35 +543,92 @@ def aggregate_top_targets(
                 continue
 
             seen_collection_ids.add(coll_id)
-            preview_industries = _extract_names_from_field(item.get("targeted_industries"))
-            preview_companies = _extract_names_from_field(item.get("targeted_organizations"))
-            _count_distinct_collection_mentions(
-                industry_counter,
-                industry_display_names,
-                preview_industries,
-            )
-            _count_distinct_collection_mentions(
-                company_counter,
-                company_display_names,
-                preview_companies,
-            )
+            attributes_keys = _extract_attribute_keys(item)
+            for attribute_key in attributes_keys:
+                debug_attribute_keys_frequency[attribute_key] = (
+                    debug_attribute_keys_frequency.get(attribute_key, 0) + 1
+                )
 
-            if preview_industries:
-                collections_with_industries += 1
-            else:
-                collections_without_industries += 1
+            extracted_values = {
+                "targeted_industries": _extract_names_from_field(
+                    _get_first_field(item, TOP_RANKING_FIELD_ALIASES["targeted_industries"])
+                ),
+                "targeted_regions": _extract_names_from_field(
+                    _get_first_field(item, TOP_RANKING_FIELD_ALIASES["targeted_regions"])
+                ),
+                "source_regions": _extract_names_from_field(
+                    _get_first_field(item, TOP_RANKING_FIELD_ALIASES["source_regions"])
+                ),
+                "tags": _extract_names_from_field(
+                    _get_first_field(item, TOP_RANKING_FIELD_ALIASES["tags"])
+                ),
+                "collection_type": _extract_names_from_field(
+                    _get_first_field(item, TOP_RANKING_FIELD_ALIASES["collection_type"])
+                ),
+                "targeted_organizations": _extract_organization_names_from_preview(item),
+            }
+            creation_date = _get_first_field(item, ("creation_date", "created_at", "published_date"))
+            timeline_value = _build_timeline_bucket(creation_date, month)
+
+            for coverage_key, values in extracted_values.items():
+                if values:
+                    fields_coverage[coverage_key] += 1
+            if timeline_value:
+                fields_coverage["timeline"] += 1
+
+            if len(debug_sample_collection_fields) < 5:
+                debug_ranking_fields = {
+                    key: values
+                    for key, values in extracted_values.items()
+                    if values
+                }
+                if timeline_value:
+                    debug_ranking_fields["timeline"] = [timeline_value]
+                debug_sample_collection_fields.append(
+                    {
+                        "id": coll_id,
+                        "name": _stringify_value(item.get("name") or item.get("title")) or "",
+                        "creation_date": creation_date,
+                        "attributes_keys": attributes_keys,
+                        "non_empty_ranking_fields": debug_ranking_fields,
+                    }
+                )
+
+            for ranking_key in normalized_rankings:
+                if ranking_key == "timeline":
+                    values = [timeline_value] if timeline_value else []
+                else:
+                    values = extracted_values.get(ranking_key, [])
+                _count_distinct_collection_mentions(
+                    counters[ranking_key],
+                    display_names[ranking_key],
+                    values,
+                )
 
             collection_metadata = {
                 "id": coll_id,
                 "name": _stringify_value(item.get("name") or item.get("title")) or "",
-                "collection_type": _stringify_value(item.get("collection_type")) or "",
-                "targeted_industries": item.get("targeted_industries"),
-                "targeted_regions": item.get("targeted_regions"),
-                "source_regions": item.get("source_regions"),
-                "tags": item.get("tags"),
+                "collection_type": _get_first_field(
+                    item, TOP_RANKING_FIELD_ALIASES["collection_type"]
+                ),
+                "targeted_industries": _get_first_field(
+                    item, TOP_RANKING_FIELD_ALIASES["targeted_industries"]
+                ),
+                "targeted_organizations": _get_first_field(
+                    item, TOP_RANKING_FIELD_ALIASES["targeted_organizations"]
+                ),
+                "targeted_regions": _get_first_field(
+                    item, TOP_RANKING_FIELD_ALIASES["targeted_regions"]
+                ),
+                "source_regions": _get_first_field(
+                    item, TOP_RANKING_FIELD_ALIASES["source_regions"]
+                ),
+                "tags": _get_first_field(item, TOP_RANKING_FIELD_ALIASES["tags"]),
+                "creation_date": creation_date,
+                "attributes_keys": attributes_keys,
             }
             collections_analyzed.append(collection_metadata)
-            if deep_organization_lookup and not preview_companies:
+            if deep_organization_lookup and not extracted_values["targeted_organizations"]:
                 collections_requiring_company_details.append(collection_metadata)
 
         cursor = search_result.get("next_cursor")
@@ -442,31 +650,30 @@ def aggregate_top_targets(
             detail_company_names = _extract_company_names_from_analysis(
                 details.get("analysis", {})
             )
-            _count_distinct_collection_mentions(
-                company_counter,
-                company_display_names,
-                detail_company_names,
-            )
+            if "targeted_organizations" in counters:
+                _count_distinct_collection_mentions(
+                    counters["targeted_organizations"],
+                    display_names["targeted_organizations"],
+                    detail_company_names,
+                )
             company_detail_lookups_succeeded += 1
         except GTIClientError:
             continue
 
-    period_label = (
-        f"{start_year}-{effective_end_year}"
-        if effective_end_year != start_year
-        else str(start_year)
-    )
-
-    ranked_industries = _build_ranked_collection_results(
-        industry_counter,
-        industry_display_names,
-        top_n,
-    )
-    ranked_companies = _build_ranked_collection_results(
-        company_counter,
-        company_display_names,
-        top_n,
-    )
+    rankings = {
+        ranking_key: (
+            _build_timeline_results(counters[ranking_key], display_names[ranking_key])
+            if ranking_key == "timeline"
+            else _build_ranked_collection_results(
+                counters[ranking_key],
+                display_names[ranking_key],
+                top_n,
+            )
+        )
+        for ranking_key in normalized_rankings
+    }
+    ranked_industries = rankings.get("targeted_industries", [])
+    ranked_companies = rankings.get("targeted_organizations", [])
     top_companies_status = "ok" if ranked_companies else "not enough data"
 
     if company_detail_lookups_attempted:
@@ -486,7 +693,9 @@ def aggregate_top_targets(
         "period": period_label,
         "start_year": start_year,
         "end_year": effective_end_year,
+        "month": month,
         "top_n": top_n,
+        "selected_rankings": normalized_rankings,
         "collections_analyzed": len(collections_analyzed),
         "collection_preview_fields": collections_analyzed,
         "collections_seen": len(seen_collection_ids),
@@ -494,15 +703,21 @@ def aggregate_top_targets(
         "deep_organization_lookup": deep_organization_lookup,
         "max_detail_lookups": effective_max_detail_lookups,
         "api_request_estimate": api_request_estimate,
-        "collections_with_targeted_industries": collections_with_industries,
-        "collections_without_targeted_industries": collections_without_industries,
-        "unique_industries_count": len(industry_counter),
+        "estimated_api_requests": api_request_estimate["estimated_total_requests"],
+        "actual_search_requests": pages_fetched,
+        "fields_coverage": fields_coverage,
+        "debug_attribute_keys_frequency": debug_attribute_keys_frequency,
+        "debug_sample_collection_fields": debug_sample_collection_fields,
+        "collections_with_targeted_industries": fields_coverage["targeted_industries"],
+        "collections_without_targeted_industries": len(collections_analyzed) - fields_coverage["targeted_industries"],
+        "unique_industries_count": len(counters.get("targeted_industries", {})),
         "pages_fetched": pages_fetched,
         "company_detail_lookups_attempted": company_detail_lookups_attempted,
         "company_detail_lookups_succeeded": company_detail_lookups_succeeded,
         "top_industries": ranked_industries,
         "top_companies": ranked_companies,
         "top_companies_status": top_companies_status,
+        "rankings": rankings,
         "query_used": query,
         "methodology": (
             f"Analyzed {len(collections_analyzed)} distinct GTI collections from "
@@ -514,24 +729,113 @@ def aggregate_top_targets(
 
 
 def _extract_names_from_field(field: Any) -> list[str]:
-    """Extract string names from a GTI API field that may be a list, dict, or string."""
+    """Extract readable leaf names from GTI fields without stringifying raw objects."""
 
     if field is None:
         return []
     if isinstance(field, str):
         stripped = field.strip()
         return [stripped] if stripped else []
+    if isinstance(field, bool):
+        return []
+    if isinstance(field, (int, float)):
+        return [str(field)]
     if isinstance(field, list):
         names: list[str] = []
         for item in field:
             names.extend(_extract_names_from_field(item))
-        return names
+        return _dedupe_preserving_order(names)
     if isinstance(field, dict):
+        names: list[str] = []
         for key in ("name", "label", "title", "value", "id"):
-            candidate = field.get(key)
-            if isinstance(candidate, str) and candidate.strip():
-                return [candidate.strip()]
+            if key in field:
+                names.extend(_extract_names_from_field(field.get(key)))
+                break
+
+        for key, value in field.items():
+            if key in ("name", "label", "title", "value", "id"):
+                continue
+            names.extend(_extract_names_from_field(value))
+        return _dedupe_preserving_order(names)
     return []
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    """Remove duplicate readable values while keeping API order."""
+
+    deduped_values: list[str] = []
+    seen_values: set[str] = set()
+    for value in values:
+        normalized_value = value.casefold()
+        if not normalized_value or normalized_value in seen_values:
+            continue
+        seen_values.add(normalized_value)
+        deduped_values.append(value)
+
+    return deduped_values
+
+
+def _extract_attribute_keys(item: dict[str, Any]) -> list[str]:
+    """Return attribute keys exposed by an Intelligence Search preview item."""
+
+    raw_keys = item.get("attributes_keys")
+    if isinstance(raw_keys, list):
+        return sorted(str(key) for key in raw_keys)
+
+    attributes = item.get("attributes")
+    if isinstance(attributes, dict):
+        return sorted(str(key) for key in attributes.keys())
+
+    return []
+
+
+def _extract_organization_names_from_preview(item: dict[str, Any]) -> list[str]:
+    """Collect organization names exposed directly in Intelligence Search preview data."""
+
+    return _extract_names_from_field(
+        _get_first_field(item, TOP_RANKING_FIELD_ALIASES["targeted_organizations"])
+    )
+
+
+def _build_timeline_bucket(creation_date: Any, month: int | None) -> str | None:
+    """Group creation dates by month for year mode, and by day for month mode."""
+
+    if creation_date is None:
+        return None
+
+    if isinstance(creation_date, (int, float)) and not isinstance(creation_date, bool):
+        timestamp = float(creation_date)
+        if timestamp > 1_000_000_000_000:
+            timestamp = timestamp / 1000
+        try:
+            parsed_date = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+        return parsed_date.strftime("%Y-%m-%d" if month else "%Y-%m")
+
+    creation_date_text = str(creation_date).strip()
+    if not creation_date_text:
+        return None
+
+    if re.fullmatch(r"\d+(?:\.\d+)?", creation_date_text):
+        timestamp = float(creation_date_text)
+        if timestamp > 1_000_000_000_000:
+            timestamp = timestamp / 1000
+        try:
+            parsed_date = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+        return parsed_date.strftime("%Y-%m-%d" if month else "%Y-%m")
+
+    match = re.match(r"^(\d{4})-(\d{2})-(\d{2})", creation_date_text)
+    if not match:
+        return None
+
+    year_part, month_part, day_part = match.groups()
+    if month is None:
+        return f"{year_part}-{month_part}"
+
+    return f"{year_part}-{month_part}-{day_part}"
 
 
 def _count_distinct_collection_mentions(
@@ -581,6 +885,25 @@ def _build_ranked_collection_results(
             "report_count": count,
         }
         for index, (normalized_name, count) in enumerate(ranked_items)
+    ]
+
+
+def _build_timeline_results(
+    counter: dict[str, int],
+    display_names: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Return timeline buckets in chronological order."""
+
+    return [
+        {
+            "rank": index + 1,
+            "name": display_names[normalized_name],
+            "collection_count": count,
+            "report_count": count,
+        }
+        for index, (normalized_name, count) in enumerate(
+            sorted(counter.items(), key=lambda item: display_names[item[0]])
+        )
     ]
 
 
@@ -1178,31 +1501,40 @@ def _simplify_intelligence_search_item(item: dict[str, Any]) -> dict[str, Any]:
                 _extract_exact_field(item, normalized_attributes, "title")
             ),
             "collection_type": _normalize_collection_field(
-                _extract_exact_field(item, normalized_attributes, "collection_type")
+                _get_first_field(item, TOP_RANKING_FIELD_ALIASES["collection_type"])
             ),
             "creation_date": _normalize_collection_field(
-                _extract_exact_field(item, normalized_attributes, "creation_date")
+                _get_first_field(item, ("creation_date", "created_at", "published_date"))
             ),
             "targeted_industries": _normalize_collection_field(
-                _extract_exact_field(item, normalized_attributes, "targeted_industries")
+                _get_first_field(item, TOP_RANKING_FIELD_ALIASES["targeted_industries"])
             ),
             "targeted_organizations": _normalize_collection_field(
-                _first_present(normalized_attributes, (
-                    "targeted_organizations",
-                    "affected_organizations",
-                    "victim_organizations",
-                    "organizations",
-                    "victims",
-                ))
+                _get_first_field(item, TOP_RANKING_FIELD_ALIASES["targeted_organizations"])
+            ),
+            "affected_organizations": _normalize_collection_field(
+                _get_first_field(item, ("affected_organizations",))
+            ),
+            "victim_organizations": _normalize_collection_field(
+                _get_first_field(item, ("victim_organizations",))
+            ),
+            "organizations": _normalize_collection_field(
+                _get_first_field(item, ("organizations",))
+            ),
+            "victims": _normalize_collection_field(
+                _get_first_field(item, ("victims",))
+            ),
+            "companies": _normalize_collection_field(
+                _get_first_field(item, ("companies",))
             ),
             "targeted_regions": _normalize_collection_field(
-                _extract_exact_field(item, normalized_attributes, "targeted_regions")
+                _get_first_field(item, TOP_RANKING_FIELD_ALIASES["targeted_regions"])
             ),
             "source_regions": _normalize_collection_field(
-                _extract_exact_field(item, normalized_attributes, "source_regions")
+                _get_first_field(item, TOP_RANKING_FIELD_ALIASES["source_regions"])
             ),
             "tags": _normalize_collection_field(
-                _extract_exact_field(item, normalized_attributes, "tags")
+                _get_first_field(item, TOP_RANKING_FIELD_ALIASES["tags"])
             ),
             "attributes_keys": sorted(str(key) for key in normalized_attributes.keys()),
         }
