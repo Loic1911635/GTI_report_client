@@ -11,7 +11,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from backend.gti_client import (
-    DEFAULT_TOP_TARGETS_MAX_COLLECTIONS,
     GTIClientError,
     MAX_TOP_TARGETS_DETAIL_LOOKUPS,
     MockGTIClient,
@@ -132,7 +131,7 @@ class TopTargetsRequest(BaseModel):
     start_year: int = Field(default=2024, ge=2018, description="Start year of the analysis period.")
     end_year: int | None = Field(default=None, description="End year (inclusive). Defaults to start_year.")
     top_n: int = Field(default=10, ge=1, le=50, description="Number of top results to return.")
-    max_collections: int = Field(default=DEFAULT_TOP_TARGETS_MAX_COLLECTIONS, ge=1, le=DEFAULT_TOP_TARGETS_MAX_COLLECTIONS, description="Stop after this many collections.")
+    max_collections: int | None = Field(default=None, ge=1, description="Stop after this many collections. None = paginate until exhausted.")
     deep_organization_lookup: bool = Field(default=False, description="Enable bounded per-collection organization detail lookups.")
     max_detail_lookups: int | None = Field(default=None, ge=0, le=MAX_TOP_TARGETS_DETAIL_LOOKUPS, description="Maximum per-collection detail lookups when deep organization lookup is enabled.")
 
@@ -148,7 +147,7 @@ class TopTargetsResponse(BaseModel):
     collections_without_targeted_industries: int = 0
     unique_industries_count: int = 0
     pages_fetched: int = 0
-    max_collections: int = DEFAULT_TOP_TARGETS_MAX_COLLECTIONS
+    max_collections: int | None = None
     deep_organization_lookup: bool = False
     max_detail_lookups: int = 0
     api_request_estimate: dict[str, Any] = Field(default_factory=dict)
@@ -525,7 +524,7 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             collections_without_targeted_industries=int(result.get("collections_without_targeted_industries", 0)),
             unique_industries_count=int(result.get("unique_industries_count", 0)),
             pages_fetched=int(result.get("pages_fetched", 0)),
-            max_collections=int(result.get("max_collections", DEFAULT_TOP_TARGETS_MAX_COLLECTIONS)),
+            max_collections=result.get("max_collections"),
             deep_organization_lookup=bool(result.get("deep_organization_lookup", False)),
             max_detail_lookups=int(result.get("max_detail_lookups", 0)),
             api_request_estimate=result.get("api_request_estimate", {}),

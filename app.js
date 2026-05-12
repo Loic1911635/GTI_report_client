@@ -58,7 +58,6 @@ const INDUSTRY_SNAPSHOT_EXPLORER = "Industry Snapshot Explorer";
 const COMPANY_EXPOSURE_DTM = "Company Exposure / DTM";
 const GTI_INTELLIGENCE_SEARCH = "GTI Intelligence Search";
 const TOP_TARGETS_RANKING = "Top Targets Ranking";
-const TOP_TARGETS_DEFAULT_MAX_COLLECTIONS = 1000;
 const TOP_TARGETS_SEARCH_PAGE_SIZE = 40;
 const TOP_TARGETS_DEFAULT_DEEP_LOOKUPS = 25;
 const TOP_TARGETS_MAX_DETAIL_LOOKUPS = 50;
@@ -284,23 +283,25 @@ function syncTopTargetsDeepLookupControls() {
 }
 
 function buildTopTargetsRequestEstimate(maxCollections, deepLookup, maxDetailLookups) {
-    const boundedCollections = Math.min(
-        Math.max(Number(maxCollections) || TOP_TARGETS_DEFAULT_MAX_COLLECTIONS, 1),
-        TOP_TARGETS_DEFAULT_MAX_COLLECTIONS,
-    );
+    const hasCollectionLimit = maxCollections !== null && maxCollections !== undefined && String(maxCollections).trim() !== "";
+    const collectionLimit = hasCollectionLimit
+        ? Math.max(Number(maxCollections) || 1, 1)
+        : null;
     const detailLookups = deepLookup
         ? Math.min(
             Math.max(Number(maxDetailLookups) || TOP_TARGETS_DEFAULT_DEEP_LOOKUPS, 0),
             TOP_TARGETS_MAX_DETAIL_LOOKUPS,
         )
         : 0;
-    const searchRequests = Math.ceil(boundedCollections / TOP_TARGETS_SEARCH_PAGE_SIZE);
+    const searchRequests = collectionLimit === null
+        ? null
+        : Math.ceil(collectionLimit / TOP_TARGETS_SEARCH_PAGE_SIZE);
 
     return {
-        maxCollections: boundedCollections,
+        maxCollections: collectionLimit,
         searchRequests,
         detailLookups,
-        totalRequests: searchRequests + detailLookups,
+        totalRequests: searchRequests === null ? null : searchRequests + detailLookups,
     };
 }
 
@@ -1274,7 +1275,7 @@ async function runTopTargetsRanking() {
     const endYear = endYearRaw ? Number(endYearRaw) : null;
     const topN = Number(topTargetsTopNField.value || 10);
     const maxCollectionsRaw = topTargetsMaxCollectionsField.value.trim();
-    const maxCollections = maxCollectionsRaw ? Number(maxCollectionsRaw) : TOP_TARGETS_DEFAULT_MAX_COLLECTIONS;
+    const maxCollections = maxCollectionsRaw ? Number(maxCollectionsRaw) : null;
     const deepOrganizationLookup = topTargetsDeepLookupField.checked;
     const maxDetailLookupsRaw = topTargetsMaxDetailLookupsField.value.trim();
     const maxDetailLookups = deepOrganizationLookup
@@ -1288,10 +1289,10 @@ async function runTopTargetsRanking() {
 
     const shouldRun = window.confirm(
         `Estimated API requests before running:\n` +
-        `${estimate.searchRequests} Intelligence Search request(s)\n` +
+        `${estimate.searchRequests ?? "unbounded"} Intelligence Search request(s)\n` +
         `${estimate.detailLookups} collection detail lookup(s)\n` +
-        `${estimate.totalRequests} total request(s)\n\n` +
-        `Max collections: ${estimate.maxCollections}`,
+        `${estimate.totalRequests ?? "unbounded"} total request(s)\n\n` +
+        `Max collections: ${estimate.maxCollections ?? "unlimited"}`,
     );
     if (!shouldRun) {
         updateStatus("Idle", "idle");

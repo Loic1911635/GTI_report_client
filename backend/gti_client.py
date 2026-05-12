@@ -22,7 +22,6 @@ VIRUSTOTAL_DTM_EVENTS_URL = "https://www.virustotal.com/api/v3/dtm/events"
 MAX_SAFE_DTM_PAGES = 5
 DEFAULT_INTELLIGENCE_SEARCH_LIMIT = 10
 MAX_INTELLIGENCE_SEARCH_LIMIT = 40
-DEFAULT_TOP_TARGETS_MAX_COLLECTIONS = 1000
 DEFAULT_TOP_TARGETS_MAX_DETAIL_LOOKUPS = 0
 DEFAULT_TOP_TARGETS_DEEP_DETAIL_LOOKUPS = 25
 MAX_TOP_TARGETS_DETAIL_LOOKUPS = 50
@@ -308,12 +307,8 @@ def aggregate_top_targets(
     if effective_end_year < start_year:
         raise ValueError("end_year must be >= start_year.")
 
-    effective_max_collections = (
-        DEFAULT_TOP_TARGETS_MAX_COLLECTIONS
-        if max_collections is None
-        else min(max_collections, DEFAULT_TOP_TARGETS_MAX_COLLECTIONS)
-    )
-    if effective_max_collections < 1:
+    effective_max_collections = max_collections
+    if effective_max_collections is not None and effective_max_collections < 1:
         raise ValueError("max_collections must be >= 1.")
 
     if max_detail_lookups is None:
@@ -337,14 +332,20 @@ def aggregate_top_targets(
     date_query = f"creation_date:{start_year}-01-01+ creation_date:{effective_end_year}-12-31-"
     query = f"entity:collection {date_query}"
     estimated_search_requests = (
-        (effective_max_collections + MAX_INTELLIGENCE_SEARCH_LIMIT - 1)
+        None
+        if effective_max_collections is None
+        else (effective_max_collections + MAX_INTELLIGENCE_SEARCH_LIMIT - 1)
         // MAX_INTELLIGENCE_SEARCH_LIMIT
     )
     api_request_estimate = {
         "max_collections": effective_max_collections,
         "search_requests": estimated_search_requests,
         "detail_lookup_requests": effective_max_detail_lookups,
-        "total_requests": estimated_search_requests + effective_max_detail_lookups,
+        "total_requests": (
+            None
+            if estimated_search_requests is None
+            else estimated_search_requests + effective_max_detail_lookups
+        ),
     }
 
     industry_counter: dict[str, int] = {}
@@ -360,7 +361,10 @@ def aggregate_top_targets(
     cursor: str | None = None
 
     while True:
-        if len(seen_collection_ids) >= effective_max_collections:
+        if (
+            effective_max_collections is not None
+            and len(seen_collection_ids) >= effective_max_collections
+        ):
             break
 
         search_result = intelligence_search(
@@ -377,7 +381,10 @@ def aggregate_top_targets(
 
         items = search_result.get("simplified_preview", [])
         for item in items:
-            if len(seen_collection_ids) >= effective_max_collections:
+            if (
+                effective_max_collections is not None
+                and len(seen_collection_ids) >= effective_max_collections
+            ):
                 break
 
             coll_id = _stringify_value(item.get("id")) or ""
