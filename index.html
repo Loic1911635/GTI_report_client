@@ -266,6 +266,15 @@
                     </div>
                     <div id="top-targets-actions" hidden>
                         <button id="top-targets-button" type="button" class="generate-button secondary-button btn-full">Run Ranking</button>
+                        <label class="checkbox-option export-debug-option" for="top_targets_include_debug_docx">
+                            <input id="top_targets_include_debug_docx" name="top_targets_include_debug_docx" type="checkbox">
+                            <span>Include technical debug appendix</span>
+                        </label>
+                        <label class="field">
+                            <span>Word template <small>(optional)</small></span>
+                            <input id="top_targets_docx_template" name="top_targets_docx_template" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+                        </label>
+                        <button id="top-targets-docx-button" type="button" class="generate-button secondary-button btn-full" hidden disabled>Export Word Report</button>
                     </div>
                 </div>
 

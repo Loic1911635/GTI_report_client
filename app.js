@@ -43,6 +43,9 @@ const topTargetsMaxCollectionsField = document.getElementById("top_targets_max_c
 const topTargetsDeepLookupField = document.getElementById("top_targets_deep_lookup");
 const topTargetsMaxDetailLookupsField = document.getElementById("top_targets_max_detail_lookups");
 const topTargetsEstimatePanel = document.getElementById("top-targets-estimate");
+const topTargetsIncludeDebugDocxField = document.getElementById("top_targets_include_debug_docx");
+const topTargetsDocxTemplateField = document.getElementById("top_targets_docx_template");
+const topTargetsDocxButton = document.getElementById("top-targets-docx-button");
 const statsYearField = document.getElementById("stats_year");
 const statsTargetField = document.getElementById("stats_target");
 const industriesChartEl = document.getElementById("industries-chart");
@@ -128,6 +131,7 @@ let lastDownloadFilename = "";
 let lastDownloadFormat = "markdown";
 let lastIntelligenceSearchResponse = null;
 let lastCollectionAnalysisResponse = null;
+let lastTopTargetsResponse = null;
 let activeCollectionAnalysisId = "";
 let collectionAnalysisInProgressId = "";
 
@@ -299,8 +303,22 @@ function setIntelligenceSearchLoadingState(isLoading) {
 
 function setTopTargetsLoadingState(isLoading) {
     topTargetsButton.disabled = isLoading;
+    if (topTargetsDocxButton) {
+        topTargetsDocxButton.disabled = isLoading || !lastTopTargetsResponse;
+    }
     topTargetsButton.textContent = isLoading ? "Analyzing GTI collections..." : "Run Ranking";
     updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
+}
+
+function setTopTargetsDocxState(isReady, isExporting = false) {
+    if (!topTargetsDocxButton) {
+        return;
+    }
+    topTargetsDocxButton.hidden = !isReady;
+    topTargetsDocxButton.disabled = !isReady || isExporting;
+    topTargetsDocxButton.textContent = isExporting
+        ? "Exporting Word report..."
+        : "Export Word Report";
 }
 
 function syncTopTargetsDeepLookupControls() {
@@ -465,6 +483,7 @@ function syncTargetRequirement() {
         lastGeneratedReport = "";
         setDownloadState(false);
     }
+    setTopTargetsDocxState(isTopTargets && Boolean(lastTopTargetsResponse));
 
     updateModeCard(reportTypeField.value);
     updateEmptyState(reportTypeField.value);
@@ -561,6 +580,192 @@ function downloadCurrentReport() {
     downloadLink.click();
     downloadLink.remove();
     URL.revokeObjectURL(downloadUrl);
+}
+
+function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const result = String(reader.result || "");
+            resolve(result.includes(",") ? result.split(",", 2)[1] : result);
+        };
+        reader.onerror = () => reject(reader.error || new Error("Failed to read template file."));
+        reader.readAsDataURL(file);
+    });
+}
+
+function escapeXml(text) {
+    return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;");
+}
+
+function createRankingChartPng(rows, title) {
+    if (!Array.isArray(rows) || rows.length === 0) {
+        return Promise.resolve(null);
+    }
+
+    const chartRows = rows.slice(0, 10);
+    const width = 900;
+    const rowHeight = 42;
+    const height = 92 + chartRows.length * rowHeight;
+    const maxCount = Math.max(
+        ...chartRows.map((row) => Number(row.collection_count ?? row.report_count ?? 0)),
+        1,
+    );
+    const bars = chartRows.map((row, index) => {
+        const count = Number(row.collection_count ?? row.report_count ?? 0);
+        const barWidth = Math.max(4, Math.round((count / maxCount) * 430));
+        const y = 72 + index * rowHeight;
+        const label = escapeXml(String(row.name || "Unknown").slice(0, 48));
+        return `
+            <text x="24" y="${y + 17}" font-family="Arial" font-size="15" fill="#10232d">${label}</text>
+            <rect x="340" y="${y}" width="${barWidth}" height="22" rx="4" fill="#0d7f7a"></rect>
+            <text x="${350 + barWidth}" y="${y + 17}" font-family="Arial" font-size="14" fill="#10232d">${count}</text>
+        `;
+    }).join("");
+    const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+            <rect width="100%" height="100%" fill="#ffffff"/>
+            <text x="24" y="36" font-family="Arial" font-weight="700" font-size="24" fill="#095f63">${escapeXml(title)}</text>
+            <text x="24" y="58" font-family="Arial" font-size="13" fill="#52656f">Counts represent distinct GTI collections</text>
+            ${bars}
+        </svg>
+    `;
+
+    return new Promise((resolve) => {
+        const image = new Image();
+        const svgUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+        image.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            const context = canvas.getContext("2d");
+            if (!context) {
+                URL.revokeObjectURL(svgUrl);
+                resolve(null);
+                return;
+            }
+            context.drawImage(image, 0, 0);
+            URL.revokeObjectURL(svgUrl);
+            resolve(canvas.toDataURL("image/png"));
+        };
+        image.onerror = () => {
+            URL.revokeObjectURL(svgUrl);
+            resolve(null);
+        };
+        image.src = svgUrl;
+    });
+}
+
+async function buildTopRankingChartPayload(rankingResult) {
+    const chartMapping = {
+        industry_chart: ["targeted_industries", "Top Targeted Industries"],
+        targeted_regions_chart: ["targeted_regions", "Top Targeted Regions"],
+        source_regions_chart: ["source_regions", "Top Source Regions"],
+        tags_chart: ["tags", "Top Tags / Themes"],
+        collection_type_chart: ["collection_type", "Collection Type Distribution"],
+        timeline_chart: ["timeline", "Timeline"],
+    };
+    const charts = {};
+    const rankings = rankingResult.rankings || {};
+
+    await Promise.all(Object.entries(chartMapping).map(async ([chartKey, [rankingKey, title]]) => {
+        const png = await createRankingChartPng(rankings[rankingKey] || [], title);
+        if (png) {
+            charts[chartKey] = png;
+        }
+    }));
+
+    return charts;
+}
+
+async function buildTopRankingDocxPayload() {
+    const includeTechnicalDebug = Boolean(topTargetsIncludeDebugDocxField?.checked);
+    const rankingResult = { ...(lastTopTargetsResponse || {}) };
+
+    delete rankingResult.api_key;
+    delete rankingResult.x_api_key;
+    delete rankingResult.raw_data;
+    delete rankingResult.raw_json;
+    delete rankingResult.collection_preview_fields;
+
+    if (!includeTechnicalDebug) {
+        delete rankingResult.debug_attribute_keys_frequency;
+        delete rankingResult.debug_sample_collection_fields;
+    }
+
+    const charts = await buildTopRankingChartPayload(lastTopTargetsResponse || {});
+    if (Object.keys(charts).length > 0) {
+        rankingResult.charts = charts;
+    }
+
+    const payload = {
+        ranking_result: rankingResult,
+        include_technical_debug: includeTechnicalDebug,
+    };
+
+    const templateFile = topTargetsDocxTemplateField?.files?.[0];
+    if (templateFile) {
+        payload.custom_template_base64 = await readFileAsBase64(templateFile);
+        payload.custom_template_filename = templateFile.name;
+    }
+
+    return payload;
+}
+
+async function exportTopRankingDocx() {
+    if (!lastTopTargetsResponse) {
+        showMessage("Run Top Rankings before exporting a Word report.", "error");
+        return;
+    }
+
+    setTopTargetsDocxState(true, true);
+    updateStatus("Exporting", "running");
+    clearMessage();
+
+    try {
+        const response = await fetch("/export/top-ranking-docx", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(await buildTopRankingDocxPayload()),
+        });
+
+        if (!response.ok) {
+            let detail = "Word export failed.";
+            try {
+                const errorPayload = await response.json();
+                detail = errorPayload.detail || detail;
+            } catch (_) {
+                // Keep the generic message when the backend returned a non-JSON error.
+            }
+            throw new Error(detail);
+        }
+
+        const reportBlob = await response.blob();
+        const contentDisposition = response.headers.get("content-disposition") || "";
+        const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+        const filename = filenameMatch?.[1] || "gti-top-targets-ranking.docx";
+        const downloadUrl = URL.createObjectURL(reportBlob);
+        const downloadLink = document.createElement("a");
+        downloadLink.href = downloadUrl;
+        downloadLink.download = filename;
+        document.body.append(downloadLink);
+        downloadLink.click();
+        downloadLink.remove();
+        URL.revokeObjectURL(downloadUrl);
+
+        updateStatus("Success", "success");
+        showMessage("Word report exported.", "success");
+    } catch (error) {
+        updateStatus("Error", "error");
+        showMessage(error.message || "Word export failed.", "error");
+    } finally {
+        setTopTargetsDocxState(Boolean(lastTopTargetsResponse), false);
+    }
 }
 
 function formatApiValue(value) {
@@ -1476,6 +1681,8 @@ async function runTopTargetsRanking() {
     }
 
     setTopTargetsLoadingState(true);
+    lastTopTargetsResponse = null;
+    setTopTargetsDocxState(false);
     setDownloadState(false);
     lastGeneratedReport = "";
 
@@ -1504,9 +1711,11 @@ async function runTopTargetsRanking() {
             responseData,
             selectedRankings,
         );
+        lastTopTargetsResponse = normalizedResponseData;
 
         renderTopTargetsResult(normalizedResponseData);
         renderLiveRankingsFromTopTargets(normalizedResponseData);
+        setTopTargetsDocxState(true);
         switchToTab("report");
         rawJsonOutput.textContent = JSON.stringify(normalizedResponseData, null, 2);
 
@@ -1657,6 +1866,7 @@ dtmMonitorsButton.addEventListener("click", testDtmMonitors);
 dtmAlertsButton.addEventListener("click", testDtmAlerts);
 intelligenceSearchButton.addEventListener("click", searchGtiIntelligence);
 topTargetsButton?.addEventListener("click", runTopTargetsRanking);
+topTargetsDocxButton?.addEventListener("click", exportTopRankingDocx);
 topTargetsDeepLookupField?.addEventListener("change", syncTopTargetsDeepLookupControls);
 [
     topTargetsStartYearField,

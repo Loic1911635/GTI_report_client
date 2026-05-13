@@ -142,6 +142,12 @@ body {
     gap: 8px;
 }
 
+#top-targets-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
 /* ── Fields ────────────────────────────────────────────── */
 
 .field {
@@ -864,6 +870,11 @@ select:focus {
 
 .live-ranking-section + .live-ranking-section {
     margin-top: 18px;
+}
+
+.export-debug-option {
+    align-items: flex-start;
+    font-size: 0.8rem;
 }
 
 .source-badge-area { margin-top: 7px; display: flex; gap: 5px; }

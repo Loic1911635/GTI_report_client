@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import time
+import tempfile
+import base64
+import binascii
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +35,10 @@ from backend.report_generator import (
     normalize_requested_sections,
     normalize_threat_landscape,
 )
+from backend.top_ranking_docx import (
+    ensure_default_top_ranking_template,
+    generate_top_ranking_docx,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -53,6 +60,7 @@ def _cache_set(key: str, value: Any) -> None:
 INDEX_FILE = PROJECT_ROOT / "index.html"
 APP_JS_FILE = PROJECT_ROOT / "app.js"
 STYLE_CSS_FILE = PROJECT_ROOT / "style.css"
+TOP_RANKING_TEMPLATE_FILE = PROJECT_ROOT / "templates" / "gti_top_ranking_template.docx"
 
 
 app = FastAPI(
@@ -169,6 +177,24 @@ class TopTargetsResponse(BaseModel):
     collection_preview_fields: list[dict[str, Any]] = Field(default_factory=list)
     query_used: str
     methodology: str
+
+
+class TopRankingDocxExportRequest(BaseModel):
+    """Input payload for DOCX export from an existing Top Rankings result."""
+
+    ranking_result: dict[str, Any] = Field(..., description="Already computed Top Rankings result.")
+    include_technical_debug: bool = Field(
+        default=False,
+        description="Include debug appendix with raw field diagnostics.",
+    )
+    custom_template_base64: str | None = Field(
+        default=None,
+        description="Optional base64-encoded DOCX template.",
+    )
+    custom_template_filename: str | None = Field(
+        default=None,
+        description="Original custom template filename.",
+    )
 
 
 class IndustrySnapshotExplorerResponse(BaseModel):
@@ -577,6 +603,62 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
         raise HTTPException(
             status_code=500,
             detail=f"Top targets ranking failed: {exc}",
+        ) from exc
+
+
+@app.post("/export/top-ranking-docx", include_in_schema=False)
+def export_top_ranking_docx(request: TopRankingDocxExportRequest) -> FileResponse:
+    """Generate a DOCX report from an already computed Top Rankings result."""
+
+    try:
+        ranking_result = dict(request.ranking_result or {})
+        ranking_result.pop("api_key", None)
+        ranking_result.pop("x_api_key", None)
+        ranking_result["include_technical_debug"] = request.include_technical_debug
+
+        template_path = ensure_default_top_ranking_template(TOP_RANKING_TEMPLATE_FILE)
+        if request.custom_template_base64:
+            try:
+                template_bytes = base64.b64decode(
+                    request.custom_template_base64,
+                    validate=True,
+                )
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError("The uploaded template is not valid base64.") from exc
+            if not template_bytes.startswith(b"PK"):
+                raise ValueError("The uploaded template must be a .docx file.")
+            custom_template_path = (
+                Path(tempfile.gettempdir())
+                / "gti_report_client"
+                / "uploaded_top_ranking_template.docx"
+            )
+            custom_template_path.parent.mkdir(parents=True, exist_ok=True)
+            custom_template_path.write_bytes(template_bytes)
+            template_path = custom_template_path
+
+        output_dir = Path(tempfile.gettempdir()) / "gti_report_client"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        period_slug = str(ranking_result.get("period") or "top-rankings").lower()
+        period_slug = "".join(
+            character if character.isalnum() else "-"
+            for character in period_slug
+        ).strip("-") or "top-rankings"
+        output_path = output_dir / f"gti-top-targets-ranking-{period_slug}.docx"
+
+        generated_path = generate_top_ranking_docx(
+            ranking_result=ranking_result,
+            template_path=str(template_path),
+            output_path=str(output_path),
+        )
+        return FileResponse(
+            generated_path,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            filename=Path(generated_path).name,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Top ranking DOCX export failed: {exc}",
         ) from exc
 
 
