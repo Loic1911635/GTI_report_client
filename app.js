@@ -93,6 +93,14 @@ const TOP_TARGETS_RANKING_LABELS = {
     targeted_organizations: "Top Targeted Organizations",
 };
 
+const TOP_TARGETS_CROSS_ANALYSIS_LABELS = {
+    industries_by_tags: "Industries by Tags / Themes",
+    industries_by_collection_type: "Industries by Collection Type",
+    industries_by_targeted_region: "Industries by Targeted Region",
+    timeline_by_collection_type: "Timeline by Collection Type",
+    source_region_by_targeted_region: "Source Region by Targeted Region",
+};
+
 const MODE_META = {
     [IOC_ENRICHMENT]: {
         label: "IoC Enrichment",
@@ -691,7 +699,6 @@ async function buildTopRankingDocxPayload() {
     delete rankingResult.x_api_key;
     delete rankingResult.raw_data;
     delete rankingResult.raw_json;
-    delete rankingResult.collection_preview_fields;
 
     if (!includeTechnicalDebug) {
         delete rankingResult.debug_attribute_keys_frequency;
@@ -1567,6 +1574,67 @@ function renderSelectedRankingSections(responseData) {
     }).join("");
 }
 
+function renderCrossAnalysisSections(responseData) {
+    const matrices = responseData.cross_analysis || {};
+    const matrixKeys = Object.keys(TOP_TARGETS_CROSS_ANALYSIS_LABELS)
+        .filter((key) => matrices[key]);
+
+    if (matrixKeys.length === 0) {
+        return "";
+    }
+
+    const matrixHtml = matrixKeys.map((matrixKey) => {
+        const matrix = matrices[matrixKey] || {};
+        const columns = Array.isArray(matrix.columns) ? matrix.columns : [];
+        const rows = Array.isArray(matrix.rows) ? matrix.rows : [];
+        const maxValue = Math.max(
+            ...rows.flatMap((row) => Array.isArray(row.cells) ? row.cells.map(Number) : []),
+            0,
+        );
+        const tableHtml = columns.length && rows.length
+            ? `
+                <div class="cross-analysis-table-wrap">
+                    <table class="cross-analysis-table">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                ${columns.map((column) => `<th>${escapeHtml(String(column))}</th>`).join("")}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows.map((row) => `
+                                <tr>
+                                    <th>${escapeHtml(String(row.label || ""))}</th>
+                                    ${(Array.isArray(row.cells) ? row.cells : []).map((value) => {
+                                        const count = Number(value || 0);
+                                        const intensity = maxValue > 0 ? count / maxValue : 0;
+                                        return `<td style="--heat:${intensity.toFixed(3)}">${escapeHtml(String(count))}</td>`;
+                                    }).join("")}
+                                </tr>
+                            `).join("")}
+                        </tbody>
+                    </table>
+                </div>
+            `
+            : "<p><em>Not enough overlapping preview fields to build this matrix.</em></p>";
+
+        return `
+            <section class="cross-analysis-section">
+                <h3>${escapeHtml(TOP_TARGETS_CROSS_ANALYSIS_LABELS[matrixKey])}</h3>
+                <p><strong>Eligible collections:</strong> ${escapeHtml(String(matrix.eligible_collections || 0))}</p>
+                <p>${escapeHtml(String(matrix.interpretation || "No interpretation available."))}</p>
+                ${tableHtml}
+            </section>
+        `;
+    }).join("");
+
+    return `
+        <h2>Cross-analysis</h2>
+        <p>These matrices count co-occurring GTI collection metadata values. Counts represent GTI collections, not confirmed incident counts.</p>
+        ${matrixHtml}
+    `;
+}
+
 function renderTopTargetsResult(responseData) {
     const detailLookupsAttempted = Number(responseData.company_detail_lookups_attempted || 0);
     const detailLookupsSucceeded = Number(responseData.company_detail_lookups_succeeded || 0);
@@ -1574,6 +1642,7 @@ function renderTopTargetsResult(responseData) {
     const fieldsCoverage = responseData.fields_coverage || {};
     const collectionsAnalyzed = Number(responseData.collections_analyzed || 0);
     const rankingSectionsHtml = renderSelectedRankingSections(responseData);
+    const crossAnalysisHtml = renderCrossAnalysisSections(responseData);
     const detailLookupHtml = detailLookupsAttempted > 0
         ? `
         <p>
@@ -1612,6 +1681,8 @@ function renderTopTargetsResult(responseData) {
         ${detailLookupHtml}
 
         ${rankingSectionsHtml}
+
+        ${crossAnalysisHtml}
 
         <div class="methodology-note">
             <strong>Methodology:</strong> ${escapeHtml(String(responseData.methodology || ""))}

@@ -36,6 +36,7 @@ from backend.report_generator import (
     normalize_threat_landscape,
 )
 from backend.top_ranking_docx import (
+    build_cross_analysis_matrices,
     ensure_default_top_ranking_template,
     generate_top_ranking_docx,
 )
@@ -174,6 +175,7 @@ class TopTargetsResponse(BaseModel):
     top_companies: list[dict[str, Any]]
     top_companies_status: str = "ok"
     rankings: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    cross_analysis: dict[str, Any] = Field(default_factory=dict)
     collection_preview_fields: list[dict[str, Any]] = Field(default_factory=list)
     query_used: str
     methodology: str
@@ -561,6 +563,9 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             deep_organization_lookup=request.deep_organization_lookup,
             max_detail_lookups=request.max_detail_lookups,
         )
+        cross_analysis = build_cross_analysis_matrices(
+            result.get("collection_preview_fields", [])
+        )
         return TopTargetsResponse(
             status="success",
             period=str(result["period"]),
@@ -591,6 +596,7 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             top_companies=result["top_companies"],
             top_companies_status=str(result.get("top_companies_status", "ok")),
             rankings=result.get("rankings", {}),
+            cross_analysis=cross_analysis,
             collection_preview_fields=result.get("collection_preview_fields", []),
             query_used=str(result["query_used"]),
             methodology=str(result["methodology"]),

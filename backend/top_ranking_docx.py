@@ -23,6 +23,7 @@ RANKING_LABELS = {
     "top_targeted_regions": "Top targeted regions",
     "top_source_regions": "Top source regions",
     "top_tags": "Top tags / themes",
+    "threat_categories": "Threat categories",
     "collection_type_distribution": "Collection type distribution",
     "timeline": "Timeline",
     "top_targeted_organizations": "Top targeted organizations",
@@ -33,9 +34,18 @@ RANKING_RESULT_KEYS = {
     "top_targeted_regions": "targeted_regions",
     "top_source_regions": "source_regions",
     "top_tags": "tags",
+    "threat_categories": "threat_categories",
     "collection_type_distribution": "collection_type",
     "timeline": "timeline",
     "top_targeted_organizations": "targeted_organizations",
+}
+
+CROSS_ANALYSIS_LABELS = {
+    "industries_by_tags": "Industries by tags / themes",
+    "industries_by_collection_type": "Industries by collection type",
+    "industries_by_targeted_region": "Industries by targeted region",
+    "timeline_by_collection_type": "Timeline by collection type",
+    "source_region_by_targeted_region": "Source region by targeted region",
 }
 
 
@@ -43,9 +53,36 @@ def ensure_default_top_ranking_template(template_path: str | Path) -> Path:
     """Create the default importable DOCX template when it is missing."""
 
     resolved_template_path = Path(template_path)
-    if resolved_template_path.exists():
+    if resolved_template_path.exists() and not _template_contains_legacy_text(
+        resolved_template_path
+    ):
         return resolved_template_path
 
+    _create_default_top_ranking_template(resolved_template_path)
+    return resolved_template_path
+
+
+def _template_contains_legacy_text(template_path: Path) -> bool:
+    """Return True when the bundled default template still has old dev copy."""
+
+    try:
+        document = Document(template_path)
+    except Exception:
+        return True
+
+    legacy_markers = (
+        "Ranking tables are inserted after template rendering",
+        "Chart image supplied.",
+        "Field coverage is inserted after template rendering.",
+    )
+    template_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    return any(marker in template_text for marker in legacy_markers)
+
+
+def _create_default_top_ranking_template(template_path: Path) -> None:
+    """Write the default clean DOCX template."""
+
+    resolved_template_path = template_path
     resolved_template_path.parent.mkdir(parents=True, exist_ok=True)
 
     document = Document()
@@ -76,6 +113,7 @@ def ensure_default_top_ranking_template(template_path: str | Path) -> Path:
     document.add_paragraph("{{ executive_summary }}")
     document.add_paragraph("Selected rankings: {{ selected_rankings_text }}")
     document.add_paragraph("Main top results: {{ main_top_results }}")
+    document.add_paragraph("Field coverage: {{ field_coverage_summary }}")
 
     document.add_heading("Methodology", level=1)
     document.add_paragraph("GTI query used: {{ query_used }}")
@@ -85,15 +123,7 @@ def ensure_default_top_ranking_template(template_path: str | Path) -> Path:
     document.add_paragraph("{{ methodology }}")
 
     document.add_heading("Rankings", level=1)
-    document.add_paragraph(
-        "Ranking tables are inserted after template rendering from the computed result object."
-    )
-    document.add_paragraph("Industry chart: {{ industry_chart_note }}")
-    document.add_paragraph("Targeted regions chart: {{ targeted_regions_chart_note }}")
-    document.add_paragraph("Source regions chart: {{ source_regions_chart_note }}")
-    document.add_paragraph("Tags chart: {{ tags_chart_note }}")
-    document.add_paragraph("Collection type chart: {{ collection_type_chart_note }}")
-    document.add_paragraph("Timeline chart: {{ timeline_chart_note }}")
+    document.add_paragraph("The ranking tables and charts below use already computed preview fields.")
 
     document.add_heading("Limitations", level=1)
     document.add_paragraph("Counts represent GTI collections, not confirmed incident counts.", style=None)
@@ -101,11 +131,10 @@ def ensure_default_top_ranking_template(template_path: str | Path) -> Path:
     document.add_paragraph("Crowdsourced collections may introduce noise.", style=None)
 
     document.add_heading("Appendix", level=1)
-    document.add_paragraph("Field coverage is inserted after template rendering.")
+    document.add_paragraph("Detailed field coverage is included below.")
     document.add_paragraph("{{ technical_debug_note }}")
 
     document.save(resolved_template_path)
-    return resolved_template_path
 
 
 def generate_top_ranking_docx(
@@ -139,6 +168,7 @@ def generate_top_ranking_docx(
     document = Document(rendered_path)
     _append_ranking_tables(document, context)
     _append_chart_notes(document, context)
+    _append_cross_analysis(document, context)
     _append_field_coverage(document, context)
     _append_optional_debug(document, context, include_debug)
 
@@ -159,7 +189,6 @@ def _sanitize_ranking_result(ranking_result: dict[str, Any]) -> dict[str, Any]:
         "x_api_key",
         "raw_data",
         "raw_json",
-        "collection_preview_fields",
     ):
         sanitized.pop(key, None)
     return sanitized
@@ -186,6 +215,14 @@ def _build_docx_context(
         template_key: _normalize_ranking_rows(rankings.get(result_key, []))
         for template_key, result_key in RANKING_RESULT_KEYS.items()
     }
+    preview_collections = ranking_result.get("collection_preview_fields", [])
+    threat_categories = _build_single_field_ranking(
+        preview_collections,
+        "threat_categories",
+    )
+    if threat_categories:
+        ranking_tables["threat_categories"] = threat_categories
+    cross_analysis = build_cross_analysis_matrices(preview_collections)
     ranking_notes = {
         f"{key}_note": "" if rows else EMPTY_RANKING_NOTE
         for key, rows in ranking_tables.items()
@@ -207,6 +244,10 @@ def _build_docx_context(
         "selected_rankings": selected_rankings,
         "selected_rankings_text": ", ".join(selected_rankings) if selected_rankings else "None",
         "fields_coverage": fields_coverage,
+        "field_coverage_summary": _build_field_coverage_summary(
+            fields_coverage,
+            collections_analyzed,
+        ),
         "methodology": str(ranking_result.get("methodology") or ""),
         "preview_mode_note": "Preview-only mode: uses only fields returned by GTI Intelligence Search.",
         "preview_only_explanation": (
@@ -223,9 +264,18 @@ def _build_docx_context(
             if include_debug
             else "Technical debug appendix was not included."
         ),
-        "debug_attribute_keys_frequency": ranking_result.get("debug_attribute_keys_frequency", {}),
-        "debug_sample_collection_fields": ranking_result.get("debug_sample_collection_fields", []),
+        "debug_attribute_keys_frequency": (
+            ranking_result.get("debug_attribute_keys_frequency", {})
+            if include_debug
+            else {}
+        ),
+        "debug_sample_collection_fields": (
+            ranking_result.get("debug_sample_collection_fields", [])
+            if include_debug
+            else []
+        ),
         "_chart_temp_paths": chart_temp_paths,
+        "cross_analysis": cross_analysis,
     }
     context.update(ranking_tables)
     context.update(ranking_notes)
@@ -253,6 +303,288 @@ def _normalize_ranking_rows(rows: Any) -> list[dict[str, Any]]:
             }
         )
     return normalized_rows
+
+
+def _build_single_field_ranking(
+    collections: Any,
+    field_name: str,
+    top_n: int = 25,
+) -> list[dict[str, Any]]:
+    """Build a simple distinct-per-collection ranking from preview fields."""
+
+    if not isinstance(collections, list):
+        return []
+
+    counter: dict[str, int] = {}
+    display: dict[str, str] = {}
+    for collection in collections:
+        if not isinstance(collection, dict):
+            continue
+        values = _extract_docx_names(collection.get(field_name))
+        for value in set(values):
+            normalized = value.casefold()
+            display.setdefault(normalized, value)
+            counter[normalized] = counter.get(normalized, 0) + 1
+
+    return [
+        {
+            "rank": index + 1,
+            "name": display[key],
+            "collection_count": count,
+        }
+        for index, (key, count) in enumerate(
+            sorted(counter.items(), key=lambda item: (-item[1], display[item[0]].casefold()))[:top_n]
+        )
+    ]
+
+
+def build_cross_analysis_matrices(
+    collections: Any,
+    top_rows: int = 8,
+    top_columns: int = 8,
+) -> dict[str, Any]:
+    """Build co-occurrence matrices from collection preview fields only."""
+
+    if not isinstance(collections, list):
+        collections = []
+
+    matrix_specs = {
+        "industries_by_tags": ("targeted_industries", "tags"),
+        "industries_by_collection_type": ("targeted_industries", "collection_type"),
+        "industries_by_targeted_region": ("targeted_industries", "targeted_regions"),
+        "timeline_by_collection_type": ("timeline", "collection_type"),
+        "source_region_by_targeted_region": ("source_regions", "targeted_regions"),
+    }
+
+    return {
+        matrix_key: _build_cooccurrence_matrix(
+            collections=collections,
+            row_field=row_field,
+            column_field=column_field,
+            top_rows=top_rows,
+            top_columns=top_columns,
+        )
+        for matrix_key, (row_field, column_field) in matrix_specs.items()
+    }
+
+
+def _build_cooccurrence_matrix(
+    collections: list[Any],
+    row_field: str,
+    column_field: str,
+    top_rows: int,
+    top_columns: int,
+) -> dict[str, Any]:
+    """Build one distinct-per-collection co-occurrence matrix."""
+
+    pair_counter: dict[tuple[str, str], int] = {}
+    row_counter: dict[str, int] = {}
+    column_counter: dict[str, int] = {}
+    row_display: dict[str, str] = {}
+    column_display: dict[str, str] = {}
+    eligible_collections = 0
+
+    for collection in collections:
+        if not isinstance(collection, dict):
+            continue
+        row_values = _extract_matrix_values(collection, row_field)
+        column_values = _extract_matrix_values(collection, column_field)
+        if not row_values or not column_values:
+            continue
+
+        eligible_collections += 1
+        normalized_rows = {_normalize_matrix_value(value): value for value in row_values}
+        normalized_columns = {_normalize_matrix_value(value): value for value in column_values}
+        for row_key, row_label in normalized_rows.items():
+            if not row_key:
+                continue
+            row_display.setdefault(row_key, row_label)
+            row_counter[row_key] = row_counter.get(row_key, 0) + 1
+        for column_key, column_label in normalized_columns.items():
+            if not column_key:
+                continue
+            column_display.setdefault(column_key, column_label)
+            column_counter[column_key] = column_counter.get(column_key, 0) + 1
+        for row_key in normalized_rows:
+            for column_key in normalized_columns:
+                if not row_key or not column_key:
+                    continue
+                pair_counter[(row_key, column_key)] = pair_counter.get((row_key, column_key), 0) + 1
+
+    selected_rows = [
+        key
+        for key, _ in sorted(
+            row_counter.items(),
+            key=lambda item: (-item[1], row_display[item[0]].casefold()),
+        )[:top_rows]
+    ]
+    selected_columns = [
+        key
+        for key, _ in sorted(
+            column_counter.items(),
+            key=lambda item: (-item[1], column_display[item[0]].casefold()),
+        )[:top_columns]
+    ]
+    table_rows = []
+    for row_key in selected_rows:
+        cells = [
+            pair_counter.get((row_key, column_key), 0)
+            for column_key in selected_columns
+        ]
+        table_rows.append(
+            {
+                "label": row_display[row_key],
+                "cells": cells,
+            }
+        )
+
+    top_cells = [
+        {
+            "row": row_display[row_key],
+            "column": column_display[column_key],
+            "count": count,
+        }
+        for (row_key, column_key), count in pair_counter.items()
+    ]
+    top_cells = sorted(
+        top_cells,
+        key=lambda item: (-item["count"], item["row"].casefold(), item["column"].casefold()),
+    )[:5]
+
+    return {
+        "eligible_collections": eligible_collections,
+        "columns": [column_display[key] for key in selected_columns],
+        "rows": table_rows,
+        "top_cells": top_cells,
+        "interpretation": _build_cross_analysis_interpretation(top_cells, eligible_collections),
+    }
+
+
+def _extract_matrix_values(collection: dict[str, Any], field_name: str) -> list[str]:
+    """Extract field values for cross-analysis matrices."""
+
+    if field_name == "timeline":
+        bucket = _build_docx_timeline_bucket(collection.get("creation_date"))
+        return [bucket] if bucket else []
+
+    return _extract_docx_names(collection.get(field_name))
+
+
+def _extract_docx_names(value: Any) -> list[str]:
+    """Extract readable values from preview fields for reporting."""
+
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    if isinstance(value, bool):
+        return []
+    if isinstance(value, (int, float)):
+        return [str(value)]
+    if isinstance(value, list):
+        names: list[str] = []
+        for item in value:
+            names.extend(_extract_docx_names(item))
+        return _dedupe_names(names)
+    if isinstance(value, dict):
+        names: list[str] = []
+        for key in ("name", "label", "title", "value", "id"):
+            if key in value:
+                names.extend(_extract_docx_names(value.get(key)))
+                break
+        for key, nested_value in value.items():
+            if key in ("name", "label", "title", "value", "id"):
+                continue
+            names.extend(_extract_docx_names(nested_value))
+        return _dedupe_names(names)
+
+    return []
+
+
+def _dedupe_names(values: list[str]) -> list[str]:
+    """Dedupe extracted names while preserving order."""
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = value.casefold()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(value)
+    return deduped
+
+
+def _normalize_matrix_value(value: str) -> str:
+    """Normalize a matrix label for distinct-per-collection counting."""
+
+    return " ".join(str(value).split()).casefold()
+
+
+def _build_docx_timeline_bucket(value: Any) -> str | None:
+    """Build a YYYY-MM bucket for cross-analysis timeline rows."""
+
+    if value is None:
+        return None
+    text = str(value).strip()
+    match = re.match(r"^(\d{4})-(\d{2})", text)
+    if match:
+        return f"{match.group(1)}-{match.group(2)}"
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        try:
+            timestamp = float(text)
+            if timestamp > 1_000_000_000_000:
+                timestamp = timestamp / 1000
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m")
+        except (OSError, OverflowError, ValueError):
+            return None
+    return None
+
+
+def _build_cross_analysis_interpretation(
+    top_cells: list[dict[str, Any]],
+    eligible_collections: int,
+) -> str:
+    """Generate a concise interpretation from top co-occurrence cells."""
+
+    if not top_cells:
+        return (
+            "Not enough overlapping preview metadata was present to build this matrix."
+        )
+
+    strongest = top_cells[0]
+    return (
+        f"The strongest metadata co-occurrence is {strongest['row']} x "
+        f"{strongest['column']} with {strongest['count']} GTI collection(s) "
+        f"among {eligible_collections} eligible collection(s). These counts reflect "
+        "GTI collection metadata, not confirmed incident counts."
+    )
+
+
+def _build_field_coverage_summary(
+    fields_coverage: dict[str, Any],
+    collections_analyzed: int,
+) -> str:
+    """Create a compact field coverage sentence for the executive summary."""
+
+    if not fields_coverage:
+        return "Field coverage was not available."
+
+    labels = {
+        "targeted_industries": "targeted industries",
+        "targeted_regions": "targeted regions",
+        "source_regions": "source regions",
+        "tags": "tags / themes",
+        "collection_type": "collection type",
+        "timeline": "timeline",
+        "targeted_organizations": "targeted organizations",
+    }
+    parts = [
+        f"{label}: {_safe_int(fields_coverage.get(key))}/{collections_analyzed}"
+        for key, label in labels.items()
+    ]
+    return "; ".join(parts)
 
 
 def _build_main_top_results(ranking_tables: dict[str, list[dict[str, Any]]]) -> str:
@@ -372,6 +704,82 @@ def _append_chart_notes(document: Document, context: dict[str, Any]) -> None:
             except Exception:
                 pass
         document.add_paragraph(context.get(f"{chart_key}_note", "Chart not available."))
+
+
+def _append_cross_analysis(document: Document, context: dict[str, Any]) -> None:
+    """Append cross-analysis matrices after basic rankings."""
+
+    document.add_heading("Cross-analysis", level=1)
+    document.add_paragraph(
+        "These matrices count co-occurring GTI collection metadata values. Counts "
+        "represent GTI collections, not confirmed incident counts."
+    )
+    matrices = context.get("cross_analysis", {})
+    if not isinstance(matrices, dict) or not matrices:
+        document.add_paragraph("Cross-analysis was not available for this export.")
+        return
+
+    for matrix_key, matrix in matrices.items():
+        label = CROSS_ANALYSIS_LABELS.get(matrix_key, matrix_key)
+        document.add_heading(label, level=2)
+        eligible = _safe_int(matrix.get("eligible_collections") if isinstance(matrix, dict) else 0)
+        document.add_paragraph(f"Eligible collections: {eligible}")
+        document.add_paragraph(
+            str(matrix.get("interpretation") or "No interpretation available.")
+            if isinstance(matrix, dict)
+            else "No interpretation available."
+        )
+
+        columns = matrix.get("columns", []) if isinstance(matrix, dict) else []
+        rows = matrix.get("rows", []) if isinstance(matrix, dict) else []
+        if not columns or not rows:
+            document.add_paragraph("Not enough overlapping preview fields to build this matrix.")
+            continue
+
+        max_value = max(
+            [max(row.get("cells", [0]) or [0]) for row in rows if isinstance(row, dict)]
+            or [0]
+        )
+        table = document.add_table(rows=1, cols=len(columns) + 1)
+        table.style = "Table Grid"
+        header_cells = table.rows[0].cells
+        header_cells[0].text = ""
+        for index, column in enumerate(columns, start=1):
+            header_cells[index].text = str(column)
+
+        for row in rows:
+            cells = table.add_row().cells
+            cells[0].text = str(row.get("label", ""))
+            for index, value in enumerate(row.get("cells", []), start=1):
+                cells[index].text = str(value)
+                _shade_cell(cells[index], _heatmap_shade(_safe_int(value), max_value))
+
+
+def _heatmap_shade(value: int, max_value: int) -> str:
+    """Return a light teal heatmap color for a matrix cell."""
+
+    if value <= 0 or max_value <= 0:
+        return "FFFFFF"
+    intensity = min(1.0, value / max_value)
+    # Blend white toward the product teal color.
+    base = (13, 127, 122)
+    blended = tuple(round(255 - (255 - channel) * intensity * 0.55) for channel in base)
+    return "".join(f"{channel:02X}" for channel in blended)
+
+
+def _shade_cell(cell: Any, fill: str) -> None:
+    """Apply a background fill color to a Word table cell."""
+
+    try:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        tc_pr = cell._tc.get_or_add_tcPr()
+        shading = OxmlElement("w:shd")
+        shading.set(qn("w:fill"), fill)
+        tc_pr.append(shading)
+    except Exception:
+        return
 
 
 def _append_field_coverage(document: Document, context: dict[str, Any]) -> None:

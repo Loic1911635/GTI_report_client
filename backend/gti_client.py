@@ -624,6 +624,10 @@ def aggregate_top_targets(
                     item, TOP_RANKING_FIELD_ALIASES["source_regions"]
                 ),
                 "tags": _get_first_field(item, TOP_RANKING_FIELD_ALIASES["tags"]),
+                "threat_categories": _get_first_field(
+                    item,
+                    ("threat_categories", "threat_category"),
+                ),
                 "creation_date": creation_date,
                 "attributes_keys": attributes_keys,
             }

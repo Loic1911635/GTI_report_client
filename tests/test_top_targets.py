@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from backend import gti_client
+from backend.top_ranking_docx import build_cross_analysis_matrices
 
 
 class AggregateTopTargetsTests(unittest.TestCase):
@@ -417,6 +418,41 @@ class AggregateTopTargetsTests(unittest.TestCase):
         self.assertEqual(simplified["tags"], ["Ransomware"])
         self.assertEqual(simplified["targeted_organizations"], ["Acme"])
         self.assertIn("companies", simplified["attributes_keys"])
+
+    def test_docx_cross_analysis_counts_pairs_once_per_collection(self) -> None:
+        matrices = build_cross_analysis_matrices(
+            [
+                {
+                    "targeted_industries": ["Finance", "Finance"],
+                    "tags": ["ransomware", "ransomware"],
+                    "collection_type": "report",
+                    "targeted_regions": ["Europe"],
+                    "source_regions": ["North America"],
+                    "creation_date": "2024-05-12",
+                },
+                {
+                    "targeted_industries": ["Finance"],
+                    "tags": ["phishing"],
+                    "collection_type": "report",
+                    "targeted_regions": ["Europe"],
+                    "source_regions": ["Asia"],
+                    "creation_date": "2024-05-20",
+                },
+            ],
+            top_rows=5,
+            top_columns=5,
+        )
+
+        industry_tag = matrices["industries_by_tags"]
+        self.assertEqual(industry_tag["eligible_collections"], 2)
+        self.assertEqual(industry_tag["rows"][0]["label"], "Finance")
+        self.assertIn("ransomware", industry_tag["columns"])
+        ransomware_index = industry_tag["columns"].index("ransomware")
+        self.assertEqual(industry_tag["rows"][0]["cells"][ransomware_index], 1)
+        self.assertEqual(
+            matrices["timeline_by_collection_type"]["rows"][0]["label"],
+            "2024-05",
+        )
 
 
 if __name__ == "__main__":
