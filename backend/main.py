@@ -26,6 +26,7 @@ from backend.gti_client import (
     list_dtm_alerts,
     list_dtm_monitors,
     lookup_domain,
+    test_single_mitre_tree,
 )
 from backend.report_generator import (
     build_downloadable_filename,
@@ -145,6 +146,9 @@ class TopTargetsRequest(BaseModel):
     selected_rankings: list[str] = Field(default_factory=lambda: ["targeted_industries", "targeted_organizations"], description="Ranking sections to compute from preview fields.")
     deep_organization_lookup: bool = Field(default=False, description="Enable bounded per-collection organization detail lookups.")
     max_detail_lookups: int = Field(default=0, ge=0, le=MAX_TOP_TARGETS_DETAIL_LOOKUPS, description="Maximum per-collection detail lookups when deep organization lookup is enabled.")
+    ttp_source: str = Field(default="search_reports", description="TTP source mode: search_reports or ranking_collections.")
+    max_ttp_candidates: int = Field(default=25, ge=1, le=100, description="Maximum report candidates for MITRE tree lookups.")
+    ttp_query_filter: str | None = Field(default=None, description="Optional extra Intelligence Search filter for TTP report candidates.")
 
 
 class TopTargetsResponse(BaseModel):
@@ -174,6 +178,10 @@ class TopTargetsResponse(BaseModel):
     top_industries: list[dict[str, Any]]
     top_companies: list[dict[str, Any]]
     top_companies_status: str = "ok"
+    ttp_analysis: dict[str, Any] = Field(default_factory=dict)
+    top_tactics: list[dict[str, Any]] = Field(default_factory=list)
+    top_techniques: list[dict[str, Any]] = Field(default_factory=list)
+    top_subtechniques: list[dict[str, Any]] = Field(default_factory=list)
     rankings: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     cross_analysis: dict[str, Any] = Field(default_factory=dict)
     collection_preview_fields: list[dict[str, Any]] = Field(default_factory=list)
@@ -265,6 +273,21 @@ class CollectionDetailsResponse(BaseModel):
     collection_id: str
     experimental_exposure_score: int
     analysis: dict[str, Any]
+    raw_data: Any
+
+
+class MitreTreeTestResponse(BaseModel):
+    """Response payload returned by the direct MITRE tree diagnostic."""
+
+    status: str
+    status_code: int
+    error_message: str
+    top_level_keys: list[str]
+    data_keys: list[str]
+    tactics_count: int
+    first_tactic_sample: Any = None
+    parsed_entries_count: int
+    first_parsed_entries: list[dict[str, Any]]
     raw_data: Any
 
 
@@ -562,6 +585,9 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             selected_rankings=request.selected_rankings,
             deep_organization_lookup=request.deep_organization_lookup,
             max_detail_lookups=request.max_detail_lookups,
+            ttp_source=request.ttp_source,
+            max_ttp_candidates=request.max_ttp_candidates,
+            ttp_query_filter=request.ttp_query_filter,
         )
         cross_analysis = build_cross_analysis_matrices(
             result.get("collection_preview_fields", [])
@@ -595,6 +621,10 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             top_industries=result["top_industries"],
             top_companies=result["top_companies"],
             top_companies_status=str(result.get("top_companies_status", "ok")),
+            ttp_analysis=result.get("ttp_analysis", {}),
+            top_tactics=result.get("top_tactics", []),
+            top_techniques=result.get("top_techniques", []),
+            top_subtechniques=result.get("top_subtechniques", []),
             rankings=result.get("rankings", {}),
             cross_analysis=cross_analysis,
             collection_preview_fields=result.get("collection_preview_fields", []),
@@ -610,6 +640,37 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             status_code=500,
             detail=f"Top targets ranking failed: {exc}",
         ) from exc
+
+
+@app.post(
+    "/explore/mitre-tree-test",
+    response_model=MitreTreeTestResponse,
+)
+def test_mitre_tree_workflow(request: CollectionDetailsRequest) -> MitreTreeTestResponse:
+    """Run a direct single-collection MITRE tree diagnostic."""
+
+    try:
+        result = test_single_mitre_tree(
+            api_key=request.api_key,
+            collection_id=request.collection_id,
+        )
+        status_code = int(result["status_code"])
+        return MitreTreeTestResponse(
+            status="success" if status_code == 200 else "upstream_error",
+            status_code=status_code,
+            error_message=str(result.get("error_message") or ""),
+            top_level_keys=result.get("top_level_keys", []),
+            data_keys=result.get("data_keys", []),
+            tactics_count=int(result.get("tactics_count", 0)),
+            first_tactic_sample=result.get("first_tactic_sample"),
+            parsed_entries_count=int(result.get("parsed_entries_count", 0)),
+            first_parsed_entries=result.get("first_parsed_entries", []),
+            raw_data=result.get("raw_data"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GTIClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/export/top-ranking-docx", include_in_schema=False)

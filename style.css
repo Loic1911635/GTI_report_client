@@ -220,6 +220,15 @@ body {
     font-weight: 700;
 }
 
+.diagnostic-warning {
+    margin: 8px 0 10px;
+    padding: 9px 11px;
+    border-left: 3px solid #d95f5f;
+    background: rgba(217, 95, 95, 0.08);
+    color: #8f2f2f;
+    font-weight: 700;
+}
+
 /* ── Mode card ─────────────────────────────────────────── */
 
 .mode-card {

@@ -27,6 +27,9 @@ RANKING_LABELS = {
     "collection_type_distribution": "Collection type distribution",
     "timeline": "Timeline",
     "top_targeted_organizations": "Top targeted organizations",
+    "top_tactics": "Top MITRE tactics",
+    "top_techniques": "Top MITRE techniques",
+    "top_subtechniques": "Top MITRE subtechniques",
 }
 
 RANKING_RESULT_KEYS = {
@@ -170,6 +173,7 @@ def generate_top_ranking_docx(
     _append_chart_notes(document, context)
     _append_cross_analysis(document, context)
     _append_field_coverage(document, context)
+    _append_ttp_diagnostics(document, context)
     _append_optional_debug(document, context, include_debug)
 
     document.save(resolved_output)
@@ -215,6 +219,15 @@ def _build_docx_context(
         template_key: _normalize_ranking_rows(rankings.get(result_key, []))
         for template_key, result_key in RANKING_RESULT_KEYS.items()
     }
+    ranking_tables["top_tactics"] = _normalize_ranking_rows(
+        ranking_result.get("top_tactics", [])
+    )
+    ranking_tables["top_techniques"] = _normalize_ranking_rows(
+        ranking_result.get("top_techniques", [])
+    )
+    ranking_tables["top_subtechniques"] = _normalize_ranking_rows(
+        ranking_result.get("top_subtechniques", [])
+    )
     preview_collections = ranking_result.get("collection_preview_fields", [])
     threat_categories = _build_single_field_ranking(
         preview_collections,
@@ -263,6 +276,11 @@ def _build_docx_context(
             "Technical debug appendix included."
             if include_debug
             else "Technical debug appendix was not included."
+        ),
+        "ttp_analysis": (
+            ranking_result.get("ttp_analysis", {})
+            if isinstance(ranking_result.get("ttp_analysis"), dict)
+            else {}
         ),
         "debug_attribute_keys_frequency": (
             ranking_result.get("debug_attribute_keys_frequency", {})
@@ -807,6 +825,56 @@ def _append_field_coverage(document: Document, context: dict[str, Any]) -> None:
         cells[0].text = field_name
         cells[1].text = str(_safe_int(coverage.get(field_name)))
         cells[2].text = str(total)
+
+
+def _append_ttp_diagnostics(document: Document, context: dict[str, Any]) -> None:
+    """Append hard TTP diagnostic fields used by the app."""
+
+    ttp = context.get("ttp_analysis", {})
+    if not isinstance(ttp, dict) or not ttp:
+        return
+
+    first_debug = ttp.get("ttp_first_successful_debug", {})
+    if not isinstance(first_debug, dict):
+        first_debug = {}
+
+    document.add_heading("Appendix: TTP Diagnostics", level=1)
+    if ttp.get("warning_message"):
+        document.add_paragraph(str(ttp.get("warning_message")))
+
+    rows = (
+        ("ttp_lookups_attempted", ttp.get("ttp_lookups_attempted", 0)),
+        ("ttp_lookups_succeeded", ttp.get("ttp_lookups_succeeded", 0)),
+        ("ttp_eligible_collections", ttp.get("ttp_eligible_collections", 0)),
+        (
+            "ttp_first_successful_collection_id",
+            ttp.get("ttp_first_successful_collection_id", ""),
+        ),
+        (
+            "ttp_first_successful_debug.tactics_count",
+            first_debug.get("tactics_count", 0),
+        ),
+        ("top_tactics count", len(context.get("top_tactics", []))),
+        ("top_techniques count", len(context.get("top_techniques", []))),
+        ("top_subtechniques count", len(context.get("top_subtechniques", []))),
+    )
+
+    table = document.add_table(rows=1, cols=2)
+    table.style = "Table Grid"
+    header_cells = table.rows[0].cells
+    header_cells[0].text = "Diagnostic"
+    header_cells[1].text = "Value"
+    for key, value in rows:
+        cells = table.add_row().cells
+        cells[0].text = str(key)
+        cells[1].text = str(value)
+
+    document.add_heading("ttp_lookup_attempt_samples", level=2)
+    samples = ttp.get("ttp_lookup_attempt_samples", [])
+    if isinstance(samples, list) and samples:
+        document.add_paragraph(json.dumps(samples, indent=2, default=str))
+    else:
+        document.add_paragraph("No TTP lookup samples were recorded.")
 
 
 def _append_optional_debug(

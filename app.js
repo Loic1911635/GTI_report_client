@@ -42,6 +42,9 @@ const topTargetsTopNField = document.getElementById("top_targets_top_n");
 const topTargetsMaxCollectionsField = document.getElementById("top_targets_max_collections");
 const topTargetsDeepLookupField = document.getElementById("top_targets_deep_lookup");
 const topTargetsMaxDetailLookupsField = document.getElementById("top_targets_max_detail_lookups");
+const topTargetsTtpSourceField = document.getElementById("top_targets_ttp_source");
+const topTargetsMaxTtpCandidatesField = document.getElementById("top_targets_max_ttp_candidates");
+const topTargetsTtpQueryFilterField = document.getElementById("top_targets_ttp_query_filter");
 const topTargetsEstimatePanel = document.getElementById("top-targets-estimate");
 const topTargetsIncludeDebugDocxField = document.getElementById("top_targets_include_debug_docx");
 const topTargetsDocxTemplateField = document.getElementById("top_targets_docx_template");
@@ -66,6 +69,8 @@ const TOP_TARGETS_SEARCH_PAGE_SIZE = 40;
 const TOP_TARGETS_DEFAULT_MAX_COLLECTIONS = 1000;
 const TOP_TARGETS_DEFAULT_DEEP_LOOKUPS = 0;
 const TOP_TARGETS_MAX_DETAIL_LOOKUPS = 50;
+const TOP_TARGETS_DEFAULT_TTP_CANDIDATES = 25;
+const TOP_TARGETS_MAX_TTP_CANDIDATES = 100;
 
 const TOP_TARGETS_MONTH_NAMES = [
     "",
@@ -343,7 +348,13 @@ function syncTopTargetsDeepLookupControls() {
     updateTopTargetsEstimatePanel();
 }
 
-function buildTopTargetsRequestEstimate(maxCollections, deepLookup, maxDetailLookups) {
+function buildTopTargetsRequestEstimate(
+    maxCollections,
+    deepLookup,
+    maxDetailLookups,
+    maxTtpCandidates = TOP_TARGETS_DEFAULT_TTP_CANDIDATES,
+    ttpSource = "search_reports",
+) {
     const collectionLimit = Math.max(
         Number(maxCollections) || TOP_TARGETS_DEFAULT_MAX_COLLECTIONS,
         1,
@@ -357,12 +368,23 @@ function buildTopTargetsRequestEstimate(maxCollections, deepLookup, maxDetailLoo
     const searchRequests = collectionLimit === null
         ? null
         : Math.ceil(collectionLimit / TOP_TARGETS_SEARCH_PAGE_SIZE);
+    const ttpCandidates = Math.min(
+        Math.max(Number(maxTtpCandidates) || TOP_TARGETS_DEFAULT_TTP_CANDIDATES, 1),
+        TOP_TARGETS_MAX_TTP_CANDIDATES,
+    );
+    const ttpSearchRequests = ttpSource === "search_reports"
+        ? Math.ceil(ttpCandidates / TOP_TARGETS_SEARCH_PAGE_SIZE)
+        : 0;
+    const ttpRequests = ttpCandidates + ttpSearchRequests;
 
     return {
         maxCollections: collectionLimit,
         searchRequests,
         detailLookups,
-        totalRequests: searchRequests === null ? null : searchRequests + detailLookups,
+        ttpCandidates,
+        ttpSearchRequests,
+        ttpRequests,
+        totalRequests: searchRequests === null ? null : searchRequests + detailLookups + ttpRequests,
     };
 }
 
@@ -385,6 +407,8 @@ function updateTopTargetsEstimatePanel() {
         || !topTargetsMaxCollectionsField
         || !topTargetsDeepLookupField
         || !topTargetsMaxDetailLookupsField
+        || !topTargetsMaxTtpCandidatesField
+        || !topTargetsTtpSourceField
     ) {
         return;
     }
@@ -394,7 +418,15 @@ function updateTopTargetsEstimatePanel() {
     const maxDetailLookups = deepLookup
         ? Number(topTargetsMaxDetailLookupsField.value || 0)
         : 0;
-    const estimate = buildTopTargetsRequestEstimate(maxCollections, deepLookup, maxDetailLookups);
+    const maxTtpCandidates = Number(topTargetsMaxTtpCandidatesField.value || TOP_TARGETS_DEFAULT_TTP_CANDIDATES);
+    const ttpSource = topTargetsTtpSourceField.value || "search_reports";
+    const estimate = buildTopTargetsRequestEstimate(
+        maxCollections,
+        deepLookup,
+        maxDetailLookups,
+        maxTtpCandidates,
+        ttpSource,
+    );
     const warningHtml = estimate.totalRequests > 100
         ? `<p class="estimate-warning">Warning: this may consume a significant number of GTI API requests.</p>`
         : "";
@@ -407,6 +439,8 @@ function updateTopTargetsEstimatePanel() {
             <li>Search page size: ${escapeHtml(String(TOP_TARGETS_SEARCH_PAGE_SIZE))}</li>
             <li>Estimated search pages: ${escapeHtml(String(estimate.searchRequests))}</li>
             <li>Deep collection lookups: ${deepLookup ? escapeHtml(String(estimate.detailLookups)) : "disabled"}</li>
+            <li>TTP source: ${escapeHtml(ttpSource === "ranking_collections" ? "ranking result collections" : "report search")}</li>
+            <li>TTP MITRE tree lookups: up to ${escapeHtml(String(estimate.ttpCandidates))}</li>
             <li>Estimated API requests: ~${escapeHtml(String(estimate.totalRequests))}</li>
         </ul>
         ${warningHtml}
@@ -1546,6 +1580,22 @@ function normalizeTopTargetsResponse(responseData, requestedRankings = []) {
     normalized.top_companies = Array.isArray(responseData.top_companies)
         ? responseData.top_companies
         : rankings.targeted_organizations || [];
+    normalized.top_tactics = Array.isArray(responseData.top_tactics)
+        ? responseData.top_tactics
+        : [];
+    normalized.top_techniques = Array.isArray(responseData.top_techniques)
+        ? responseData.top_techniques
+        : [];
+    normalized.top_subtechniques = Array.isArray(responseData.top_subtechniques)
+        ? responseData.top_subtechniques
+        : [];
+    normalized.ttp_analysis = (
+        responseData.ttp_analysis
+        && typeof responseData.ttp_analysis === "object"
+        && !Array.isArray(responseData.ttp_analysis)
+    )
+        ? responseData.ttp_analysis
+        : {};
 
     return normalized;
 }
@@ -1635,6 +1685,50 @@ function renderCrossAnalysisSections(responseData) {
     `;
 }
 
+function renderTtpDiagnosticPanel(responseData) {
+    const ttp = responseData.ttp_analysis || {};
+    const firstDebug = ttp.ttp_first_successful_debug || {};
+    const samples = Array.isArray(ttp.ttp_lookup_attempt_samples)
+        ? ttp.ttp_lookup_attempt_samples
+        : [];
+    const warningMessage = ttp.warning_message
+        ? `<p class="diagnostic-warning">${escapeHtml(String(ttp.warning_message))}</p>`
+        : "";
+    const sampleHtml = samples.length > 0
+        ? `<pre>${escapeHtml(JSON.stringify(samples, null, 2))}</pre>`
+        : "<p><em>No TTP lookup samples were recorded.</em></p>";
+
+    return `
+        <details class="diagnostics-block" open>
+            <summary>TTP diagnostics</summary>
+            ${warningMessage}
+            <ul>
+                <li><strong>ttp_lookups_attempted:</strong> ${escapeHtml(String(ttp.ttp_lookups_attempted ?? 0))}</li>
+                <li><strong>ttp_lookups_succeeded:</strong> ${escapeHtml(String(ttp.ttp_lookups_succeeded ?? 0))}</li>
+                <li><strong>ttp_eligible_collections:</strong> ${escapeHtml(String(ttp.ttp_eligible_collections ?? 0))}</li>
+                <li><strong>ttp_first_successful_collection_id:</strong> ${formatApiValue(ttp.ttp_first_successful_collection_id)}</li>
+                <li><strong>ttp_first_successful_debug.tactics_count:</strong> ${escapeHtml(String(firstDebug.tactics_count ?? 0))}</li>
+                <li><strong>top_tactics count:</strong> ${escapeHtml(String(responseData.top_tactics.length))}</li>
+                <li><strong>top_techniques count:</strong> ${escapeHtml(String(responseData.top_techniques.length))}</li>
+                <li><strong>top_subtechniques count:</strong> ${escapeHtml(String(responseData.top_subtechniques.length))}</li>
+            </ul>
+            <p><strong>ttp_lookup_attempt_samples:</strong></p>
+            ${sampleHtml}
+        </details>
+    `;
+}
+
+function renderTtpSections(responseData) {
+    return `
+        <h2>Top MITRE Tactics</h2>
+        ${renderRankingTable(responseData.top_tactics || [], "collections", "No MITRE tactics were extracted.")}
+        <h2>Top MITRE Techniques</h2>
+        ${renderRankingTable(responseData.top_techniques || [], "collections", "No MITRE techniques were extracted.")}
+        <h2>Top MITRE Subtechniques</h2>
+        ${renderRankingTable(responseData.top_subtechniques || [], "collections", "No MITRE subtechniques were extracted.")}
+    `;
+}
+
 function renderTopTargetsResult(responseData) {
     const detailLookupsAttempted = Number(responseData.company_detail_lookups_attempted || 0);
     const detailLookupsSucceeded = Number(responseData.company_detail_lookups_succeeded || 0);
@@ -1642,6 +1736,8 @@ function renderTopTargetsResult(responseData) {
     const fieldsCoverage = responseData.fields_coverage || {};
     const collectionsAnalyzed = Number(responseData.collections_analyzed || 0);
     const rankingSectionsHtml = renderSelectedRankingSections(responseData);
+    const ttpDiagnosticHtml = renderTtpDiagnosticPanel(responseData);
+    const ttpSectionsHtml = renderTtpSections(responseData);
     const crossAnalysisHtml = renderCrossAnalysisSections(responseData);
     const detailLookupHtml = detailLookupsAttempted > 0
         ? `
@@ -1678,9 +1774,12 @@ function renderTopTargetsResult(responseData) {
                 <li><strong>Targeted organizations:</strong> ${escapeHtml(String(fieldsCoverage.targeted_organizations ?? 0))} / ${escapeHtml(String(collectionsAnalyzed))} collections</li>
             </ul>
         </details>
+        ${ttpDiagnosticHtml}
         ${detailLookupHtml}
 
         ${rankingSectionsHtml}
+
+        ${ttpSectionsHtml}
 
         ${crossAnalysisHtml}
 
@@ -1732,19 +1831,29 @@ async function runTopTargetsRanking() {
     const maxDetailLookups = deepOrganizationLookup
         ? (maxDetailLookupsRaw ? Number(maxDetailLookupsRaw) : TOP_TARGETS_DEFAULT_DEEP_LOOKUPS)
         : 0;
+    const ttpSource = topTargetsTtpSourceField?.value || "search_reports";
+    const maxTtpCandidatesRaw = topTargetsMaxTtpCandidatesField?.value.trim() || "";
+    const maxTtpCandidates = maxTtpCandidatesRaw
+        ? Number(maxTtpCandidatesRaw)
+        : TOP_TARGETS_DEFAULT_TTP_CANDIDATES;
+    const ttpQueryFilter = topTargetsTtpQueryFilterField?.value.trim() || null;
     const estimate = buildTopTargetsRequestEstimate(
         maxCollections,
         deepOrganizationLookup,
         maxDetailLookups,
+        maxTtpCandidates,
+        ttpSource,
     );
 
     const shouldRun = window.confirm(
         `Estimated API requests before running:\n` +
         `${estimate.searchRequests} Intelligence Search request(s)\n` +
         `${estimate.detailLookups} collection detail lookup(s)\n` +
+        `${estimate.ttpCandidates} TTP MITRE tree lookup(s)\n` +
         `${estimate.totalRequests} total request(s)\n\n` +
         `Period: ${getTopTargetsPeriodLabel()}\n` +
-        `Max collections: ${estimate.maxCollections}`,
+        `Max collections: ${estimate.maxCollections}\n` +
+        `TTP mode: ${ttpSource === "ranking_collections" ? "Use ranking result collections" : "Search reports for TTP analysis"}`,
     );
     if (!shouldRun) {
         updateStatus("Idle", "idle");
@@ -1770,6 +1879,9 @@ async function runTopTargetsRanking() {
                 selected_rankings: selectedRankings,
                 deep_organization_lookup: deepOrganizationLookup,
                 max_detail_lookups: maxDetailLookups,
+                ttp_source: ttpSource,
+                max_ttp_candidates: maxTtpCandidates,
+                ttp_query_filter: ttpQueryFilter,
             }),
         });
 
@@ -1945,6 +2057,9 @@ topTargetsDeepLookupField?.addEventListener("change", syncTopTargetsDeepLookupCo
     topTargetsTopNField,
     topTargetsMaxCollectionsField,
     topTargetsMaxDetailLookupsField,
+    topTargetsTtpSourceField,
+    topTargetsMaxTtpCandidatesField,
+    topTargetsTtpQueryFilterField,
 ].filter(Boolean).forEach((field) => {
     field.addEventListener("input", updateTopTargetsEstimatePanel);
     field.addEventListener("change", updateTopTargetsEstimatePanel);

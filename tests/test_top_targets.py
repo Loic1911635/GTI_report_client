@@ -6,6 +6,24 @@ from backend.top_ranking_docx import build_cross_analysis_matrices
 
 
 class AggregateTopTargetsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.ttp_patcher = patch(
+            "backend.gti_client.analyze_top_ttps",
+            return_value={
+                "top_tactics": [],
+                "top_techniques": [],
+                "top_subtechniques": [],
+                "ttp_lookups_attempted": 0,
+                "ttp_lookups_succeeded": 0,
+                "ttp_eligible_collections": 0,
+                "ttp_first_successful_collection_id": None,
+                "ttp_first_successful_debug": {},
+                "ttp_lookup_attempt_samples": [],
+            },
+        )
+        self.ttp_patcher.start()
+        self.addCleanup(self.ttp_patcher.stop)
+
     def test_estimate_top_ranking_requests(self) -> None:
         estimate = gti_client.estimate_top_ranking_requests(
             max_collections=1000,
@@ -452,6 +470,134 @@ class AggregateTopTargetsTests(unittest.TestCase):
         self.assertEqual(
             matrices["timeline_by_collection_type"]["rows"][0]["label"],
             "2024-05",
+        )
+
+
+class MitreTreeTtpTests(unittest.TestCase):
+    def test_known_schema_parser_extracts_techniques_and_subtechniques(self) -> None:
+        payload = {
+            "data": {
+                "tactics": [
+                    {
+                        "id": "TA0002",
+                        "name": "Execution",
+                        "techniques": [
+                            {
+                                "attack_id": "T1059",
+                                "technique_name": "Command and Scripting Interpreter",
+                                "subtechniques": [
+                                    {
+                                        "attack_id": "T1059.001",
+                                        "name": "PowerShell",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+
+        entries = gti_client._parse_mitre_tree_entries(payload)
+
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0]["type"], "technique")
+        self.assertEqual(entries[0]["tactic_name"], "Execution")
+        self.assertEqual(entries[0]["technique_id"], "T1059")
+        self.assertEqual(entries[1]["type"], "subtechnique")
+        self.assertEqual(entries[1]["subtechnique_id"], "T1059.001")
+
+    @patch("backend.gti_client._fetch_mitre_tree")
+    def test_single_mitre_tree_returns_debug_shape(self, mock_fetch_mitre_tree) -> None:
+        mock_fetch_mitre_tree.return_value = {
+            "status_code": 200,
+            "raw_data": {
+                "data": {
+                    "tactics": [
+                        {
+                            "id": "TA0002",
+                            "name": "Execution",
+                            "children": [
+                                {"id": "T1059", "name": "Command and Scripting Interpreter"}
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
+
+        result = gti_client.test_single_mitre_tree("key", "collection-id")
+
+        self.assertEqual(result["status_code"], 200)
+        self.assertEqual(result["top_level_keys"], ["data"])
+        self.assertEqual(result["data_keys"], ["tactics"])
+        self.assertEqual(result["tactics_count"], 1)
+        self.assertEqual(result["parsed_entries_count"], 1)
+        self.assertEqual(result["first_parsed_entries"][0]["technique_id"], "T1059")
+        mock_fetch_mitre_tree.assert_called_once_with("key", "collection-id")
+
+    @patch("backend.gti_client._fetch_mitre_tree")
+    @patch("backend.gti_client.intelligence_search")
+    def test_analyze_top_ttps_uses_dedicated_report_search(
+        self,
+        mock_intelligence_search,
+        mock_fetch_mitre_tree,
+    ) -> None:
+        mock_intelligence_search.return_value = {
+            "status_code": 200,
+            "next_cursor": None,
+            "simplified_preview": [{"id": "coll-1", "type": "collection"}],
+            "raw_data": {"data": []},
+        }
+        mock_fetch_mitre_tree.return_value = {
+            "status_code": 200,
+            "raw_data": {
+                "data": {
+                    "tactics": [
+                        {
+                            "id": "TA0002",
+                            "name": "Execution",
+                            "techniques": [{"id": "T1059", "name": "Command"}],
+                        }
+                    ]
+                }
+            },
+        }
+
+        result = gti_client.analyze_top_ttps(
+            api_key="key",
+            date_filter="creation_date:2024-01-01+ creation_date:2024-12-31-",
+            max_ttp_candidates=25,
+        )
+
+        query = mock_intelligence_search.call_args.kwargs["query"]
+        self.assertIn("entity:collection collection_type:report", query)
+        self.assertEqual(result["ttp_lookups_attempted"], 1)
+        self.assertEqual(result["ttp_lookups_succeeded"], 1)
+        self.assertEqual(result["ttp_first_successful_collection_id"], "coll-1")
+        self.assertEqual(result["top_tactics"][0]["name"], "TA0002 - Execution")
+        self.assertEqual(result["top_techniques"][0]["name"], "T1059 - Command")
+
+    @patch("backend.gti_client._fetch_mitre_tree")
+    def test_analyze_top_ttps_warns_when_parser_extracts_no_techniques(
+        self,
+        mock_fetch_mitre_tree,
+    ) -> None:
+        mock_fetch_mitre_tree.return_value = {
+            "status_code": 200,
+            "raw_data": {"data": {"tactics": [{"id": "TA0001", "name": "Initial Access"}]}},
+        }
+
+        result = gti_client.analyze_top_ttps(
+            api_key="key",
+            date_filter="creation_date:2024-01-01+ creation_date:2024-12-31-",
+            source="ranking_collections",
+            ranking_collections=[{"id": "coll-1"}],
+        )
+
+        self.assertEqual(
+            result["warning_message"],
+            "MITRE tree was returned by GTI, but parser failed to extract techniques.",
         )
 
 

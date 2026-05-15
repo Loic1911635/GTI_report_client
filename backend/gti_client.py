@@ -21,6 +21,8 @@ VIRUSTOTAL_INTELLIGENCE_SEARCH_URL = (
 VIRUSTOTAL_DTM_MONITORS_URL = "https://www.virustotal.com/api/v3/dtm/monitors"
 VIRUSTOTAL_DTM_ALERTS_URL = "https://www.virustotal.com/api/v3/dtm/alerts"
 VIRUSTOTAL_DTM_EVENTS_URL = "https://www.virustotal.com/api/v3/dtm/events"
+DEFAULT_TTP_CANDIDATES = 25
+MAX_TTP_CANDIDATES = 100
 MAX_SAFE_DTM_PAGES = 5
 DEFAULT_INTELLIGENCE_SEARCH_LIMIT = 10
 MAX_INTELLIGENCE_SEARCH_LIMIT = 40
@@ -329,6 +331,203 @@ def get_collection_details(
     }
 
 
+def test_single_mitre_tree(api_key: str, collection_id: str) -> dict[str, Any]:
+    """Fetch and parse one collection MITRE tree without ranking context."""
+
+    normalized_api_key = api_key.strip()
+    normalized_collection_id = collection_id.strip()
+
+    if not normalized_api_key:
+        raise ValueError("A GTI/VirusTotal API key is required for MITRE tree tests.")
+    if not normalized_collection_id:
+        raise ValueError("A collection ID is required for MITRE tree tests.")
+
+    result = _fetch_mitre_tree(normalized_api_key, normalized_collection_id)
+    payload = result.get("raw_data", {})
+    tactics = _extract_known_schema_tactics(payload)
+    parsed_entries = _parse_mitre_tree_entries(payload)
+
+    return {
+        "status_code": int(result.get("status_code", 0)),
+        "error_message": _extract_api_error_detail(payload),
+        "top_level_keys": sorted(payload.keys()) if isinstance(payload, dict) else [],
+        "data_keys": (
+            sorted(payload.get("data", {}).keys())
+            if isinstance(payload, dict) and isinstance(payload.get("data"), dict)
+            else []
+        ),
+        "tactics_count": len(tactics),
+        "first_tactic_sample": tactics[0] if tactics else None,
+        "parsed_entries_count": len(parsed_entries),
+        "first_parsed_entries": parsed_entries[:10],
+        "raw_data": payload,
+    }
+
+
+def analyze_top_ttps(
+    api_key: str,
+    date_filter: str,
+    top_n: int = 10,
+    source: str = "search_reports",
+    max_ttp_candidates: int = DEFAULT_TTP_CANDIDATES,
+    ttp_query_filter: str | None = None,
+    ranking_collections: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build top MITRE tactics, techniques, and subtechniques from report trees."""
+
+    normalized_source = (source or "search_reports").strip()
+    if normalized_source not in {"search_reports", "ranking_collections"}:
+        normalized_source = "search_reports"
+
+    effective_max_candidates = min(
+        max(_safe_int(max_ttp_candidates, DEFAULT_TTP_CANDIDATES), 1),
+        MAX_TTP_CANDIDATES,
+    )
+    normalized_filter = " ".join((ttp_query_filter or "").split())
+    ttp_query = _build_ttp_report_query(date_filter, normalized_filter)
+
+    if normalized_source == "ranking_collections":
+        candidate_ids = _extract_ttp_candidate_ids_from_ranking(
+            ranking_collections or [],
+            effective_max_candidates,
+        )
+        search_status_code = 0
+        search_requests = 0
+    else:
+        search_result = _search_ttp_report_candidates(
+            api_key=api_key,
+            query=ttp_query,
+            max_candidates=effective_max_candidates,
+        )
+        _raise_for_non_200_top_targets_result(search_result, "TTP report candidate search")
+        candidate_ids = search_result["candidate_ids"]
+        search_status_code = int(search_result["status_code"])
+        search_requests = int(search_result["search_requests"])
+
+    tactic_counter: dict[str, int] = {}
+    tactic_display: dict[str, str] = {}
+    technique_counter: dict[str, int] = {}
+    technique_display: dict[str, str] = {}
+    subtechnique_counter: dict[str, int] = {}
+    subtechnique_display: dict[str, str] = {}
+
+    lookups_attempted = 0
+    lookups_succeeded = 0
+    first_successful_collection_id = None
+    first_successful_debug: dict[str, Any] = {}
+    lookup_attempt_samples: list[dict[str, Any]] = []
+    successful_tactics_counts: list[int] = []
+    parser_failed = False
+
+    for collection_id in candidate_ids:
+        lookups_attempted += 1
+        sample: dict[str, Any] = {"collection_id": collection_id}
+        try:
+            tree_result = _fetch_mitre_tree(api_key, collection_id)
+        except GTIClientError as exc:
+            sample["status_code"] = 0
+            sample["error_message"] = str(exc)
+            if len(lookup_attempt_samples) < 10:
+                lookup_attempt_samples.append(sample)
+            continue
+
+        status_code = int(tree_result.get("status_code", 0))
+        payload = tree_result.get("raw_data", {})
+        tactics = _extract_known_schema_tactics(payload)
+        entries = _parse_mitre_tree_entries(payload)
+
+        sample.update(
+            {
+                "status_code": status_code,
+                "tactics_count": len(tactics),
+                "parsed_entries_count": len(entries),
+                "error_message": _extract_api_error_detail(payload),
+            }
+        )
+        if len(lookup_attempt_samples) < 10:
+            lookup_attempt_samples.append(sample)
+
+        if status_code != 200:
+            continue
+
+        lookups_succeeded += 1
+        successful_tactics_counts.append(len(tactics))
+        if first_successful_collection_id is None:
+            first_successful_collection_id = collection_id
+            first_successful_debug = {
+                "status_code": status_code,
+                "tactics_count": len(tactics),
+                "parsed_entries_count": len(entries),
+                "top_level_keys": (
+                    sorted(payload.keys()) if isinstance(payload, dict) else []
+                ),
+                "data_keys": (
+                    sorted(payload.get("data", {}).keys())
+                    if isinstance(payload, dict)
+                    and isinstance(payload.get("data"), dict)
+                    else []
+                ),
+            }
+
+        if len(tactics) > 0 and len(entries) == 0:
+            parser_failed = True
+
+        _count_mitre_entries_for_collection(
+            entries,
+            tactic_counter,
+            tactic_display,
+            technique_counter,
+            technique_display,
+            subtechnique_counter,
+            subtechnique_display,
+        )
+
+    top_tactics = _build_ranked_collection_results(tactic_counter, tactic_display, top_n)
+    top_techniques = _build_ranked_collection_results(
+        technique_counter,
+        technique_display,
+        top_n,
+    )
+    top_subtechniques = _build_ranked_collection_results(
+        subtechnique_counter,
+        subtechnique_display,
+        top_n,
+    )
+    all_successful_tactics_empty = (
+        lookups_succeeded > 0
+        and bool(successful_tactics_counts)
+        and all(count == 0 for count in successful_tactics_counts)
+    )
+
+    warning_message = ""
+    if parser_failed:
+        warning_message = (
+            "MITRE tree was returned by GTI, but parser failed to extract techniques."
+        )
+    elif all_successful_tactics_empty:
+        warning_message = (
+            "MITRE endpoint returned successfully but no tactics were exposed for selected reports."
+        )
+
+    return {
+        "ttp_source": normalized_source,
+        "ttp_query_used": ttp_query,
+        "ttp_candidate_search_status_code": search_status_code,
+        "ttp_candidate_search_requests": search_requests,
+        "max_ttp_candidates": effective_max_candidates,
+        "ttp_lookups_attempted": lookups_attempted,
+        "ttp_lookups_succeeded": lookups_succeeded,
+        "ttp_eligible_collections": len(candidate_ids),
+        "ttp_first_successful_collection_id": first_successful_collection_id,
+        "ttp_first_successful_debug": first_successful_debug,
+        "ttp_lookup_attempt_samples": lookup_attempt_samples,
+        "warning_message": warning_message,
+        "top_tactics": top_tactics,
+        "top_techniques": top_techniques,
+        "top_subtechniques": top_subtechniques,
+    }
+
+
 def estimate_top_ranking_requests(
     max_collections: int,
     page_size: int = MAX_INTELLIGENCE_SEARCH_LIMIT,
@@ -434,6 +633,9 @@ def aggregate_top_targets(
     selected_rankings: list[str] | None = None,
     deep_organization_lookup: bool = False,
     max_detail_lookups: int | None = None,
+    ttp_source: str = "search_reports",
+    max_ttp_candidates: int = DEFAULT_TTP_CANDIDATES,
+    ttp_query_filter: str | None = None,
 ) -> dict[str, Any]:
     """Aggregate top targeted industries and companies from GTI Intelligence Search.
 
@@ -679,6 +881,30 @@ def aggregate_top_targets(
     ranked_industries = rankings.get("targeted_industries", [])
     ranked_companies = rankings.get("targeted_organizations", [])
     top_companies_status = "ok" if ranked_companies else "not enough data"
+    ttp_result = analyze_top_ttps(
+        api_key=normalized_api_key,
+        date_filter=date_query,
+        top_n=top_n,
+        source=ttp_source,
+        max_ttp_candidates=max_ttp_candidates,
+        ttp_query_filter=ttp_query_filter,
+        ranking_collections=collections_analyzed,
+    )
+    combined_api_request_estimate = dict(api_request_estimate)
+    combined_api_request_estimate["ttp_candidate_search_requests"] = int(
+        ttp_result.get("ttp_candidate_search_requests", 0)
+    )
+    combined_api_request_estimate["ttp_lookup_requests"] = int(
+        ttp_result.get("max_ttp_candidates", 0)
+    )
+    combined_api_request_estimate["estimated_total_requests"] = (
+        int(api_request_estimate.get("estimated_total_requests", 0))
+        + combined_api_request_estimate["ttp_candidate_search_requests"]
+        + combined_api_request_estimate["ttp_lookup_requests"]
+    )
+    combined_api_request_estimate["total_requests"] = combined_api_request_estimate[
+        "estimated_total_requests"
+    ]
 
     if company_detail_lookups_attempted:
         company_methodology = (
@@ -693,7 +919,7 @@ def aggregate_top_targets(
             "collection detail lookups are disabled unless Deep organization lookup is enabled."
         )
 
-    return {
+    result = {
         "period": period_label,
         "start_year": start_year,
         "end_year": effective_end_year,
@@ -706,8 +932,8 @@ def aggregate_top_targets(
         "max_collections": effective_max_collections,
         "deep_organization_lookup": deep_organization_lookup,
         "max_detail_lookups": effective_max_detail_lookups,
-        "api_request_estimate": api_request_estimate,
-        "estimated_api_requests": api_request_estimate["estimated_total_requests"],
+        "api_request_estimate": combined_api_request_estimate,
+        "estimated_api_requests": combined_api_request_estimate["estimated_total_requests"],
         "actual_search_requests": pages_fetched,
         "fields_coverage": fields_coverage,
         "debug_attribute_keys_frequency": debug_attribute_keys_frequency,
@@ -721,6 +947,10 @@ def aggregate_top_targets(
         "top_industries": ranked_industries,
         "top_companies": ranked_companies,
         "top_companies_status": top_companies_status,
+        "ttp_analysis": ttp_result,
+        "top_tactics": ttp_result["top_tactics"],
+        "top_techniques": ttp_result["top_techniques"],
+        "top_subtechniques": ttp_result["top_subtechniques"],
         "rankings": rankings,
         "query_used": query,
         "methodology": (
@@ -730,6 +960,7 @@ def aggregate_top_targets(
             f"search results. {company_methodology}"
         ),
     }
+    return result
 
 
 def _extract_names_from_field(field: Any) -> list[str]:
@@ -762,6 +993,339 @@ def _extract_names_from_field(field: Any) -> list[str]:
             names.extend(_extract_names_from_field(value))
         return _dedupe_preserving_order(names)
     return []
+
+
+def _fetch_mitre_tree(api_key: str, collection_id: str) -> dict[str, Any]:
+    """Call the GTI collection MITRE tree endpoint for one collection."""
+
+    endpoint_result = _probe_json_endpoint(
+        api_key=api_key,
+        url=(
+            f"{VIRUSTOTAL_COLLECTIONS_URL}/"
+            f"{quote(collection_id.strip(), safe='')}/mitre_tree"
+        ),
+        params=None,
+        endpoint_name="collection_mitre_tree",
+    )
+
+    return {
+        "status_code": int(endpoint_result["http_status"]),
+        "collection_id": collection_id,
+        "raw_data": endpoint_result["raw_json"],
+    }
+
+
+def _build_ttp_report_query(date_filter: str, ttp_query_filter: str = "") -> str:
+    """Build the dedicated report search query used by TTP analysis."""
+
+    parts = ["entity:collection", "collection_type:report", date_filter.strip()]
+    if ttp_query_filter.strip():
+        parts.append(ttp_query_filter.strip())
+    return " ".join(part for part in parts if part)
+
+
+def _search_ttp_report_candidates(
+    api_key: str,
+    query: str,
+    max_candidates: int,
+) -> dict[str, Any]:
+    """Search report collections specifically for MITRE tree analysis."""
+
+    candidate_ids: list[str] = []
+    seen_ids: set[str] = set()
+    cursor: str | None = None
+    search_requests = 0
+    final_status_code = 0
+
+    while len(candidate_ids) < max_candidates:
+        search_result = intelligence_search(
+            api_key=api_key,
+            query=query,
+            limit=min(MAX_INTELLIGENCE_SEARCH_LIMIT, max_candidates - len(candidate_ids)),
+            cursor=cursor,
+        )
+        final_status_code = int(search_result.get("status_code", 0))
+        search_requests += 1
+        if final_status_code != 200:
+            return {
+                "status_code": final_status_code,
+                "candidate_ids": candidate_ids,
+                "search_requests": search_requests,
+                "raw_data": search_result.get("raw_data", {}),
+            }
+
+        items = search_result.get("simplified_preview", [])
+        for item in items:
+            collection_id = _stringify_value(item.get("id")) or ""
+            if not collection_id or collection_id in seen_ids:
+                continue
+            seen_ids.add(collection_id)
+            candidate_ids.append(collection_id)
+            if len(candidate_ids) >= max_candidates:
+                break
+
+        cursor = search_result.get("next_cursor")
+        if not cursor or not items:
+            break
+
+    return {
+        "status_code": final_status_code,
+        "candidate_ids": candidate_ids,
+        "search_requests": search_requests,
+        "raw_data": {},
+    }
+
+
+def _extract_ttp_candidate_ids_from_ranking(
+    ranking_collections: list[dict[str, Any]],
+    max_candidates: int,
+) -> list[str]:
+    """Use already-ranked collection IDs when the advanced legacy mode is selected."""
+
+    candidate_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for collection in ranking_collections:
+        if not isinstance(collection, dict):
+            continue
+        collection_id = _stringify_value(collection.get("id")) or ""
+        if not collection_id or collection_id in seen_ids:
+            continue
+        seen_ids.add(collection_id)
+        candidate_ids.append(collection_id)
+        if len(candidate_ids) >= max_candidates:
+            break
+    return candidate_ids
+
+
+def _extract_known_schema_tactics(payload: Any) -> list[dict[str, Any]]:
+    """Return payload['data']['tactics'] when GTI exposes the known MITRE schema."""
+
+    if not isinstance(payload, dict):
+        return []
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return []
+
+    tactics = data.get("tactics")
+    if not isinstance(tactics, list):
+        return []
+
+    return [tactic for tactic in tactics if isinstance(tactic, dict)]
+
+
+def _parse_mitre_tree_entries(payload: Any) -> list[dict[str, str]]:
+    """Parse MITRE tree techniques with a known-schema-first strategy."""
+
+    known_entries = _parse_known_mitre_tactics(_extract_known_schema_tactics(payload))
+    if known_entries:
+        return known_entries
+
+    return _parse_recursive_mitre_entries(payload)
+
+
+def _parse_known_mitre_tactics(tactics: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Parse data.tactics using GTI's expected tactic/technique/subtechnique shape."""
+
+    entries: list[dict[str, str]] = []
+    for tactic in tactics:
+        tactic_id = _first_string_field(
+            tactic,
+            ("id", "tactic_id", "external_id", "mitre_id"),
+        )
+        tactic_name = _first_string_field(
+            tactic,
+            ("name", "tactic_name", "label", "title"),
+        )
+        for technique in _first_list_field(
+            tactic,
+            ("techniques", "attack_techniques", "children"),
+        ):
+            if not isinstance(technique, dict):
+                continue
+            technique_id = _first_string_field(
+                technique,
+                ("id", "technique_id", "external_id", "mitre_id", "attack_id"),
+            )
+            technique_name = _first_string_field(
+                technique,
+                ("name", "technique_name", "label", "title"),
+            )
+            if technique_id or technique_name:
+                entries.append(
+                    {
+                        "type": "technique",
+                        "tactic_id": tactic_id,
+                        "tactic_name": tactic_name,
+                        "technique_id": technique_id,
+                        "technique_name": technique_name,
+                        "subtechnique_id": "",
+                        "subtechnique_name": "",
+                    }
+                )
+
+            for subtechnique in _first_list_field(
+                technique,
+                ("subtechniques", "sub_techniques", "children"),
+            ):
+                if not isinstance(subtechnique, dict):
+                    continue
+                subtechnique_id = _first_string_field(
+                    subtechnique,
+                    ("id", "technique_id", "external_id", "mitre_id", "attack_id"),
+                )
+                subtechnique_name = _first_string_field(
+                    subtechnique,
+                    ("name", "technique_name", "label", "title"),
+                )
+                if subtechnique_id or subtechnique_name:
+                    entries.append(
+                        {
+                            "type": "subtechnique",
+                            "tactic_id": tactic_id,
+                            "tactic_name": tactic_name,
+                            "technique_id": technique_id,
+                            "technique_name": technique_name,
+                            "subtechnique_id": subtechnique_id,
+                            "subtechnique_name": subtechnique_name,
+                        }
+                    )
+
+    return entries
+
+
+def _parse_recursive_mitre_entries(payload: Any) -> list[dict[str, str]]:
+    """Fallback parser for unexpected MITRE tree shapes."""
+
+    entries: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def visit(node: Any, current_tactic_name: str = "", current_tactic_id: str = "") -> None:
+        if isinstance(node, list):
+            for child in node:
+                visit(child, current_tactic_name, current_tactic_id)
+            return
+        if not isinstance(node, dict):
+            return
+
+        node_id = _first_string_field(
+            node,
+            ("id", "technique_id", "external_id", "mitre_id", "attack_id", "tactic_id"),
+        )
+        node_name = _first_string_field(
+            node,
+            ("name", "technique_name", "tactic_name", "label", "title"),
+        )
+        if node_id.upper().startswith("TA"):
+            current_tactic_id = node_id
+            current_tactic_name = node_name
+        elif _looks_like_attack_technique_id(node_id):
+            entry_type = "subtechnique" if "." in node_id else "technique"
+            entry = {
+                "type": entry_type,
+                "tactic_id": current_tactic_id,
+                "tactic_name": current_tactic_name,
+                "technique_id": "" if entry_type == "subtechnique" else node_id,
+                "technique_name": "" if entry_type == "subtechnique" else node_name,
+                "subtechnique_id": node_id if entry_type == "subtechnique" else "",
+                "subtechnique_name": node_name if entry_type == "subtechnique" else "",
+            }
+            key = (entry_type, node_id, node_name)
+            if key not in seen:
+                seen.add(key)
+                entries.append(entry)
+
+        for value in node.values():
+            visit(value, current_tactic_name, current_tactic_id)
+
+    visit(payload)
+    return entries
+
+
+def _looks_like_attack_technique_id(value: str) -> bool:
+    """Return True for ATT&CK technique IDs such as T1059 or T1059.001."""
+
+    return bool(re.fullmatch(r"T\d{4}(?:\.\d{3})?", value.strip(), flags=re.IGNORECASE))
+
+
+def _first_string_field(item: dict[str, Any], keys: tuple[str, ...]) -> str:
+    """Return the first non-empty string-like value for a set of keys."""
+
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, dict):
+            nested_value = _first_string_field(
+                value,
+                ("id", "name", "label", "title", "value"),
+            )
+            if nested_value:
+                return nested_value
+        elif isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            text = str(value).strip()
+            if text:
+                return text
+    return ""
+
+
+def _first_list_field(item: dict[str, Any], keys: tuple[str, ...]) -> list[Any]:
+    """Return the first list value from a dictionary for a set of keys."""
+
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, list):
+            return value
+    return []
+
+
+def _count_mitre_entries_for_collection(
+    entries: list[dict[str, str]],
+    tactic_counter: dict[str, int],
+    tactic_display: dict[str, str],
+    technique_counter: dict[str, int],
+    technique_display: dict[str, str],
+    subtechnique_counter: dict[str, int],
+    subtechnique_display: dict[str, str],
+) -> None:
+    """Count each MITRE tactic, technique, and subtechnique once per collection."""
+
+    tactics = [
+        _format_mitre_name(entry.get("tactic_id", ""), entry.get("tactic_name", ""))
+        for entry in entries
+    ]
+    techniques = [
+        _format_mitre_name(
+            entry.get("technique_id", ""),
+            entry.get("technique_name", ""),
+        )
+        for entry in entries
+        if entry.get("type") == "technique"
+    ]
+    subtechniques = [
+        _format_mitre_name(
+            entry.get("subtechnique_id", ""),
+            entry.get("subtechnique_name", ""),
+        )
+        for entry in entries
+        if entry.get("type") == "subtechnique"
+    ]
+
+    _count_distinct_collection_mentions(tactic_counter, tactic_display, tactics)
+    _count_distinct_collection_mentions(technique_counter, technique_display, techniques)
+    _count_distinct_collection_mentions(
+        subtechnique_counter,
+        subtechnique_display,
+        subtechniques,
+    )
+
+
+def _format_mitre_name(mitre_id: str, name: str) -> str:
+    """Return a stable display label for MITRE rankings."""
+
+    clean_id = " ".join((mitre_id or "").split()).strip()
+    clean_name = " ".join((name or "").split()).strip()
+    if clean_id and clean_name and clean_id.casefold() not in clean_name.casefold():
+        return f"{clean_id} - {clean_name}"
+    return clean_name or clean_id
 
 
 def _dedupe_preserving_order(values: list[str]) -> list[str]:

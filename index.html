@@ -177,6 +177,27 @@
                             <input id="top_targets_max_detail_lookups" name="top_targets_max_detail_lookups" type="number" value="0" min="0" max="50" disabled>
                         </label>
                     </div>
+                    <div class="field">
+                        <span>TTP MITRE Analysis</span>
+                        <p class="field-help">Default mode searches report collections directly, then calls each collection MITRE tree.</p>
+                        <label class="field">
+                            <span>Source mode</span>
+                            <select id="top_targets_ttp_source" name="top_targets_ttp_source">
+                                <option value="search_reports" selected>Search reports for TTP analysis</option>
+                                <option value="ranking_collections">Use ranking result collections</option>
+                            </select>
+                        </label>
+                        <div class="field-row">
+                            <label class="field">
+                                <span>Max TTP candidates</span>
+                                <input id="top_targets_max_ttp_candidates" name="top_targets_max_ttp_candidates" type="number" value="25" min="1" max="100">
+                            </label>
+                            <label class="field">
+                                <span>Advanced TTP filter</span>
+                                <input id="top_targets_ttp_query_filter" name="top_targets_ttp_query_filter" type="text" placeholder='ex: tag:ransomware'>
+                            </label>
+                        </div>
+                    </div>
                     <p class="field-help">Experimental: only works when organization fields are present in GTI search preview results.</p>
                     <div id="top-targets-estimate" class="estimate-panel" aria-live="polite"></div>
                 </div>
