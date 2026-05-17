@@ -98,88 +98,92 @@
 
                 <!-- Top Targets fields -->
                 <div id="top-targets-fields" class="form-block" hidden>
-                    <div class="field-row">
-                        <label class="field">
-                            <span>Start Year</span>
-                            <input id="top_targets_start_year" name="top_targets_start_year" type="number" value="2024" min="2018" max="2100">
-                        </label>
-                        <label class="field">
-                            <span>Month <small>(optional)</small></span>
-                            <select id="top_targets_month" name="top_targets_month">
-                                <option value="">Full year</option>
-                                <option value="1">January</option>
-                                <option value="2">February</option>
-                                <option value="3">March</option>
-                                <option value="4">April</option>
-                                <option value="5">May</option>
-                                <option value="6">June</option>
-                                <option value="7">July</option>
-                                <option value="8">August</option>
-                                <option value="9">September</option>
-                                <option value="10">October</option>
-                                <option value="11">November</option>
-                                <option value="12">December</option>
-                            </select>
-                        </label>
-                    </div>
-                    <div class="field-row">
-                        <label class="field">
-                            <span>Top N</span>
-                            <input id="top_targets_top_n" name="top_targets_top_n" type="number" value="10" min="1" max="50">
-                        </label>
-                        <label class="field">
-                            <span>Max collections</span>
-                            <input id="top_targets_max_collections" name="top_targets_max_collections" type="number" value="1000" min="1">
-                        </label>
-                    </div>
-                    <div class="field ranking-options">
-                        <span>Rankings to compute</span>
-                        <label class="checkbox-option">
-                            <input name="top_targets_rankings" type="checkbox" value="targeted_industries" checked>
-                            <span>Top targeted industries</span>
-                        </label>
-                        <label class="checkbox-option">
-                            <input name="top_targets_rankings" type="checkbox" value="targeted_regions" checked>
-                            <span>Top targeted regions</span>
-                        </label>
-                        <label class="checkbox-option">
-                            <input name="top_targets_rankings" type="checkbox" value="source_regions" checked>
-                            <span>Top source regions</span>
-                        </label>
-                        <label class="checkbox-option">
-                            <input name="top_targets_rankings" type="checkbox" value="tags" checked>
-                            <span>Top tags / themes</span>
-                        </label>
-                        <label class="checkbox-option">
-                            <input name="top_targets_rankings" type="checkbox" value="collection_type" checked>
-                            <span>Collection type distribution</span>
-                        </label>
-                        <label class="checkbox-option">
-                            <input name="top_targets_rankings" type="checkbox" value="timeline" checked>
-                            <span>Monthly timeline</span>
-                        </label>
-                        <label class="checkbox-option">
-                            <input name="top_targets_rankings" type="checkbox" value="targeted_organizations" checked>
-                            <span>Top targeted organizations</span>
-                        </label>
-                    </div>
-                    <div class="field-row">
-                        <div class="field checkbox-field">
-                            <span>Organizations</span>
-                            <p class="field-help">Preview-only mode: uses only fields returned by GTI Intelligence Search. This avoids expensive per-collection detail calls.</p>
+                    <details class="sidebar-panel" open>
+                        <summary>Report scope</summary>
+                        <div class="field-row">
+                            <label class="field">
+                                <span>Start Year</span>
+                                <input id="top_targets_start_year" name="top_targets_start_year" type="number" value="2024" min="2018" max="2100">
+                            </label>
+                            <label class="field">
+                                <span>Month <small>(optional)</small></span>
+                                <select id="top_targets_month" name="top_targets_month">
+                                    <option value="">Full year</option>
+                                    <option value="1">January</option>
+                                    <option value="2">February</option>
+                                    <option value="3">March</option>
+                                    <option value="4">April</option>
+                                    <option value="5">May</option>
+                                    <option value="6">June</option>
+                                    <option value="7">July</option>
+                                    <option value="8">August</option>
+                                    <option value="9">September</option>
+                                    <option value="10">October</option>
+                                    <option value="11">November</option>
+                                    <option value="12">December</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="field-row">
+                            <label class="field">
+                                <span>Top N</span>
+                                <input id="top_targets_top_n" name="top_targets_top_n" type="number" value="10" min="1" max="50">
+                            </label>
+                            <label class="field">
+                                <span>Max collections</span>
+                                <input id="top_targets_max_collections" name="top_targets_max_collections" type="number" value="1000" min="1">
+                            </label>
+                        </div>
+                    </details>
+                    <details class="sidebar-panel" open>
+                        <summary>Rankings to compute</summary>
+                        <div class="field ranking-options">
+                            <label class="checkbox-option">
+                                <input name="top_targets_rankings" type="checkbox" value="targeted_industries" checked>
+                                <span>Top targeted industries</span>
+                            </label>
+                            <label class="checkbox-option">
+                                <input name="top_targets_rankings" type="checkbox" value="targeted_regions" checked>
+                                <span>Top targeted regions</span>
+                            </label>
+                            <label class="checkbox-option">
+                                <input name="top_targets_rankings" type="checkbox" value="source_regions" checked>
+                                <span>Top source regions</span>
+                            </label>
+                            <label class="checkbox-option">
+                                <input name="top_targets_rankings" type="checkbox" value="tags" checked>
+                                <span>Tags/themes</span>
+                            </label>
+                            <label class="checkbox-option">
+                                <input name="top_targets_rankings" type="checkbox" value="collection_type" checked>
+                                <span>Collection type distribution</span>
+                            </label>
+                            <label class="checkbox-option">
+                                <input name="top_targets_rankings" type="checkbox" value="timeline" checked>
+                                <span>Monthly timeline</span>
+                            </label>
+                            <label class="checkbox-option">
+                                <input name="top_targets_rankings" type="checkbox" value="targeted_organizations" checked>
+                                <span>Targeted organizations</span>
+                            </label>
+                        </div>
+                        <div class="field-row">
                             <label class="checkbox-option" for="top_targets_deep_lookup">
                                 <input id="top_targets_deep_lookup" name="top_targets_deep_lookup" type="checkbox">
                                 <span>Deep organization lookup</span>
                             </label>
+                            <label class="field">
+                                <span>Max detail lookups</span>
+                                <input id="top_targets_max_detail_lookups" name="top_targets_max_detail_lookups" type="number" value="0" min="0" max="50" disabled>
+                            </label>
                         </div>
-                        <label class="field">
-                            <span>Max detail lookups</span>
-                            <input id="top_targets_max_detail_lookups" name="top_targets_max_detail_lookups" type="number" value="0" min="0" max="50" disabled>
+                    </details>
+                    <details class="sidebar-panel">
+                        <summary>MITRE ATT&CK analysis</summary>
+                        <label class="checkbox-option" for="top_targets_include_ttp">
+                            <input id="top_targets_include_ttp" name="top_targets_include_ttp" type="checkbox">
+                            <span>Include MITRE ATT&CK TTP analysis</span>
                         </label>
-                    </div>
-                    <div class="field">
-                        <span>TTP MITRE Analysis</span>
-                        <p class="field-help">Default mode searches report collections directly, then calls each collection MITRE tree.</p>
                         <label class="field">
                             <span>Source mode</span>
                             <select id="top_targets_ttp_source" name="top_targets_ttp_source">
@@ -197,8 +201,31 @@
                                 <input id="top_targets_ttp_query_filter" name="top_targets_ttp_query_filter" type="text" placeholder='ex: tag:ransomware'>
                             </label>
                         </div>
-                    </div>
-                    <p class="field-help">Experimental: only works when organization fields are present in GTI search preview results.</p>
+                        <p id="top-targets-ttp-warning" class="field-help">Adds up to 25 extra GTI API requests.</p>
+                    </details>
+                    <details class="sidebar-panel">
+                        <summary>Advanced diagnostics</summary>
+                        <label class="checkbox-option" for="top_targets_include_debug">
+                            <input id="top_targets_include_debug" name="top_targets_include_debug" type="checkbox">
+                            <span>Include technical debug</span>
+                        </label>
+                        <label class="checkbox-option" for="top_targets_show_raw_json">
+                            <input id="top_targets_show_raw_json" name="top_targets_show_raw_json" type="checkbox">
+                            <span>Show raw JSON in UI</span>
+                        </label>
+                    </details>
+                    <details class="sidebar-panel">
+                        <summary>Export</summary>
+                        <label class="checkbox-option export-debug-option" for="top_targets_include_debug_docx">
+                            <input id="top_targets_include_debug_docx" name="top_targets_include_debug_docx" type="checkbox">
+                            <span>Include technical debug appendix</span>
+                        </label>
+                        <label class="field">
+                            <span>Word template <small>(optional)</small></span>
+                            <input id="top_targets_docx_template" name="top_targets_docx_template" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+                        </label>
+                        <button id="top-targets-docx-button" type="button" class="generate-button secondary-button btn-full" hidden disabled>Export Word Report</button>
+                    </details>
                     <div id="top-targets-estimate" class="estimate-panel" aria-live="polite"></div>
                 </div>
 
@@ -287,15 +314,6 @@
                     </div>
                     <div id="top-targets-actions" hidden>
                         <button id="top-targets-button" type="button" class="generate-button secondary-button btn-full">Run Ranking</button>
-                        <label class="checkbox-option export-debug-option" for="top_targets_include_debug_docx">
-                            <input id="top_targets_include_debug_docx" name="top_targets_include_debug_docx" type="checkbox">
-                            <span>Include technical debug appendix</span>
-                        </label>
-                        <label class="field">
-                            <span>Word template <small>(optional)</small></span>
-                            <input id="top_targets_docx_template" name="top_targets_docx_template" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
-                        </label>
-                        <button id="top-targets-docx-button" type="button" class="generate-button secondary-button btn-full" hidden disabled>Export Word Report</button>
                     </div>
                 </div>
 
@@ -324,6 +342,8 @@
             <div class="tab-bar" role="tablist">
                 <button class="tab-btn active" data-tab="report" role="tab">Report</button>
                 <button class="tab-btn" data-tab="rankings" role="tab">Live Rankings</button>
+                <button class="tab-btn" data-tab="cross-analysis" role="tab">Cross-analysis</button>
+                <button class="tab-btn" data-tab="diagnostics" role="tab">Diagnostics</button>
                 <button class="tab-btn" data-tab="json" role="tab">Raw JSON</button>
             </div>
 
@@ -366,9 +386,29 @@
                 </div>
             </div>
 
+            <!-- Tab: Cross-analysis -->
+            <div class="tab-panel" id="tab-cross-analysis" role="tabpanel" hidden>
+                <article id="cross-analysis-output" class="report-output empty-state">
+                    <h3>Cross-analysis is empty</h3>
+                    <p>Run Top Rankings to populate co-occurrence matrices.</p>
+                </article>
+            </div>
+
+            <!-- Tab: Diagnostics -->
+            <div class="tab-panel" id="tab-diagnostics" role="tabpanel" hidden>
+                <article id="diagnostics-output" class="report-output empty-state">
+                    <h3>Technical diagnostics are disabled</h3>
+                    <p>Enable technical debug in the sidebar to inspect API/parser details.</p>
+                </article>
+            </div>
+
             <!-- Tab: Raw JSON -->
             <div class="tab-panel" id="tab-json" role="tabpanel" hidden>
                 <div class="json-panel">
+                    <div class="json-toolbar">
+                        <strong>Raw JSON</strong>
+                        <button id="copy-json-button" type="button" class="generate-button secondary-button inline-action-button">Copy JSON</button>
+                    </div>
                     <pre id="raw-json-output">No response yet.</pre>
                 </div>
             </div>

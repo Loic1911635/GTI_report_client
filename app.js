@@ -6,6 +6,9 @@ const apiKeyField = document.getElementById("api_key");
 const generateButton = document.getElementById("generate-button");
 const reportOutput = document.getElementById("report-output");
 const rawJsonOutput = document.getElementById("raw-json-output");
+const crossAnalysisOutput = document.getElementById("cross-analysis-output");
+const diagnosticsOutput = document.getElementById("diagnostics-output");
+const copyJsonButton = document.getElementById("copy-json-button");
 const messageBanner = document.getElementById("message-banner");
 const statusPill = document.getElementById("status-pill");
 const reportTypeField = document.getElementById("report_type");
@@ -42,9 +45,13 @@ const topTargetsTopNField = document.getElementById("top_targets_top_n");
 const topTargetsMaxCollectionsField = document.getElementById("top_targets_max_collections");
 const topTargetsDeepLookupField = document.getElementById("top_targets_deep_lookup");
 const topTargetsMaxDetailLookupsField = document.getElementById("top_targets_max_detail_lookups");
+const topTargetsIncludeTtpField = document.getElementById("top_targets_include_ttp");
 const topTargetsTtpSourceField = document.getElementById("top_targets_ttp_source");
 const topTargetsMaxTtpCandidatesField = document.getElementById("top_targets_max_ttp_candidates");
 const topTargetsTtpQueryFilterField = document.getElementById("top_targets_ttp_query_filter");
+const topTargetsTtpWarning = document.getElementById("top-targets-ttp-warning");
+const topTargetsIncludeDebugField = document.getElementById("top_targets_include_debug");
+const topTargetsShowRawJsonField = document.getElementById("top_targets_show_raw_json");
 const topTargetsEstimatePanel = document.getElementById("top-targets-estimate");
 const topTargetsIncludeDebugDocxField = document.getElementById("top_targets_include_debug_docx");
 const topTargetsDocxTemplateField = document.getElementById("top_targets_docx_template");
@@ -354,6 +361,7 @@ function buildTopTargetsRequestEstimate(
     maxDetailLookups,
     maxTtpCandidates = TOP_TARGETS_DEFAULT_TTP_CANDIDATES,
     ttpSource = "search_reports",
+    includeTtp = false,
 ) {
     const collectionLimit = Math.max(
         Number(maxCollections) || TOP_TARGETS_DEFAULT_MAX_COLLECTIONS,
@@ -372,16 +380,17 @@ function buildTopTargetsRequestEstimate(
         Math.max(Number(maxTtpCandidates) || TOP_TARGETS_DEFAULT_TTP_CANDIDATES, 1),
         TOP_TARGETS_MAX_TTP_CANDIDATES,
     );
-    const ttpSearchRequests = ttpSource === "search_reports"
+    const ttpSearchRequests = includeTtp && ttpSource === "search_reports"
         ? Math.ceil(ttpCandidates / TOP_TARGETS_SEARCH_PAGE_SIZE)
         : 0;
-    const ttpRequests = ttpCandidates + ttpSearchRequests;
+    const ttpLookupRequests = includeTtp ? ttpCandidates : 0;
+    const ttpRequests = ttpLookupRequests + ttpSearchRequests;
 
     return {
         maxCollections: collectionLimit,
         searchRequests,
         detailLookups,
-        ttpCandidates,
+        ttpCandidates: ttpLookupRequests,
         ttpSearchRequests,
         ttpRequests,
         totalRequests: searchRequests === null ? null : searchRequests + detailLookups + ttpRequests,
@@ -420,13 +429,18 @@ function updateTopTargetsEstimatePanel() {
         : 0;
     const maxTtpCandidates = Number(topTargetsMaxTtpCandidatesField.value || TOP_TARGETS_DEFAULT_TTP_CANDIDATES);
     const ttpSource = topTargetsTtpSourceField.value || "search_reports";
+    const includeTtp = Boolean(topTargetsIncludeTtpField?.checked);
     const estimate = buildTopTargetsRequestEstimate(
         maxCollections,
         deepLookup,
         maxDetailLookups,
         maxTtpCandidates,
         ttpSource,
+        includeTtp,
     );
+    if (topTargetsTtpWarning) {
+        topTargetsTtpWarning.textContent = `Adds up to ${includeTtp ? estimate.ttpRequests : 0} extra GTI API requests.`;
+    }
     const warningHtml = estimate.totalRequests > 100
         ? `<p class="estimate-warning">Warning: this may consume a significant number of GTI API requests.</p>`
         : "";
@@ -439,8 +453,9 @@ function updateTopTargetsEstimatePanel() {
             <li>Search page size: ${escapeHtml(String(TOP_TARGETS_SEARCH_PAGE_SIZE))}</li>
             <li>Estimated search pages: ${escapeHtml(String(estimate.searchRequests))}</li>
             <li>Deep collection lookups: ${deepLookup ? escapeHtml(String(estimate.detailLookups)) : "disabled"}</li>
-            <li>TTP source: ${escapeHtml(ttpSource === "ranking_collections" ? "ranking result collections" : "report search")}</li>
-            <li>TTP MITRE tree lookups: up to ${escapeHtml(String(estimate.ttpCandidates))}</li>
+            <li>MITRE ATT&CK analysis: ${includeTtp ? "enabled" : "disabled"}</li>
+            <li>TTP source: ${includeTtp ? escapeHtml(ttpSource === "ranking_collections" ? "ranking result collections" : "report search") : "disabled"}</li>
+            <li>TTP MITRE tree lookups: ${escapeHtml(String(estimate.ttpCandidates))}</li>
             <li>Estimated API requests: ~${escapeHtml(String(estimate.totalRequests))}</li>
         </ul>
         ${warningHtml}
@@ -1596,8 +1611,41 @@ function normalizeTopTargetsResponse(responseData, requestedRankings = []) {
     )
         ? responseData.ttp_analysis
         : {};
+    normalized.technical_debug = (
+        responseData.technical_debug
+        && typeof responseData.technical_debug === "object"
+        && !Array.isArray(responseData.technical_debug)
+    )
+        ? responseData.technical_debug
+        : null;
 
     return normalized;
+}
+
+function renderMetricChips(responseData) {
+    const estimate = responseData.api_request_estimate || {};
+    const ttp = responseData.ttp_analysis || {};
+    const selectedRankings = Array.isArray(responseData.selected_rankings)
+        ? responseData.selected_rankings.length
+        : 0;
+    const chips = [
+        `${Number(responseData.collections_analyzed || 0)} collections`,
+        `${Number(responseData.actual_search_requests ?? responseData.pages_fetched ?? 0)} search requests`,
+        `${Number(ttp.ttp_lookups_attempted || estimate.ttp_lookup_requests || 0)} TTP lookups`,
+        `${selectedRankings} ranking sections`,
+        "Word export ready",
+    ];
+
+    return `<div class="metric-chip-row">${chips.map((chip) => `<span class="metric-chip">${escapeHtml(chip)}</span>`).join("")}</div>`;
+}
+
+function renderSectionCard(title, bodyHtml, extraClass = "") {
+    return `
+        <section class="report-section-card ${extraClass}">
+            <h2>${escapeHtml(title)}</h2>
+            ${bodyHtml}
+        </section>
+    `;
 }
 
 function renderSelectedRankingSections(responseData) {
@@ -1617,10 +1665,7 @@ function renderSelectedRankingSections(responseData) {
             ? emptyHtml
             : renderRankingTable(items, countLabel);
 
-        return `
-            <h2>${escapeHtml(label)}</h2>
-            ${tableHtml}
-        `;
+        return renderSectionCard(label, tableHtml);
     }).join("");
 }
 
@@ -1669,8 +1714,8 @@ function renderCrossAnalysisSections(responseData) {
             : "<p><em>Not enough overlapping preview fields to build this matrix.</em></p>";
 
         return `
-            <section class="cross-analysis-section">
-                <h3>${escapeHtml(TOP_TARGETS_CROSS_ANALYSIS_LABELS[matrixKey])}</h3>
+            <section class="report-section-card cross-analysis-section">
+                <h2>${escapeHtml(TOP_TARGETS_CROSS_ANALYSIS_LABELS[matrixKey])}</h2>
                 <p><strong>Eligible collections:</strong> ${escapeHtml(String(matrix.eligible_collections || 0))}</p>
                 <p>${escapeHtml(String(matrix.interpretation || "No interpretation available."))}</p>
                 ${tableHtml}
@@ -1679,53 +1724,153 @@ function renderCrossAnalysisSections(responseData) {
     }).join("");
 
     return `
-        <h2>Cross-analysis</h2>
-        <p>These matrices count co-occurring GTI collection metadata values. Counts represent GTI collections, not confirmed incident counts.</p>
-        ${matrixHtml}
+        <div class="report-document">
+            <h1>Cross-analysis</h1>
+            <p>These matrices count co-occurring GTI collection metadata values. Counts represent GTI collections, not confirmed incident counts.</p>
+            ${matrixHtml}
+        </div>
     `;
 }
 
-function renderTtpDiagnosticPanel(responseData) {
+function renderCrossAnalysisTab(responseData) {
+    const html = renderCrossAnalysisSections(responseData);
+    if (!html) {
+        crossAnalysisOutput.classList.add("empty-state");
+        crossAnalysisOutput.innerHTML = `
+        <h3>Cross-analysis is empty</h3>
+        <p>Not enough overlapping preview fields were available for this run.</p>
+        `;
+        return;
+    }
+    crossAnalysisOutput.classList.remove("empty-state");
+    crossAnalysisOutput.innerHTML = html;
+}
+
+function renderCrossAnalysisSummary(responseData) {
+    const matrices = responseData.cross_analysis || {};
+    const matrixKeys = Object.keys(TOP_TARGETS_CROSS_ANALYSIS_LABELS)
+        .filter((key) => matrices[key]);
+    if (matrixKeys.length === 0) {
+        return renderSectionCard(
+            "Cross-analysis summary",
+            "<p><em>No cross-analysis matrix is available for this run.</em></p>",
+        );
+    }
+
+    const items = matrixKeys.map((matrixKey) => {
+        const matrix = matrices[matrixKey] || {};
+        return `<li><strong>${escapeHtml(TOP_TARGETS_CROSS_ANALYSIS_LABELS[matrixKey])}:</strong> ${escapeHtml(String(matrix.eligible_collections || 0))} eligible collections</li>`;
+    }).join("");
+    return renderSectionCard(
+        "Cross-analysis summary",
+        `<ul>${items}</ul><button type="button" class="link-button" data-switch-tab="cross-analysis">Open Cross-analysis tab</button>`,
+    );
+}
+
+function renderTtpStatusCard(responseData) {
     const ttp = responseData.ttp_analysis || {};
-    const firstDebug = ttp.ttp_first_successful_debug || {};
-    const samples = Array.isArray(ttp.ttp_lookup_attempt_samples)
-        ? ttp.ttp_lookup_attempt_samples
-        : [];
+    const enabled = Boolean(ttp.enabled);
+    const attempted = Number(ttp.ttp_lookups_attempted || 0);
+    const succeeded = Number(ttp.ttp_lookups_succeeded || 0);
+    const status = !enabled
+        ? "Disabled"
+        : attempted > 0 && succeeded === attempted
+            ? "Complete"
+            : "Partial";
+    const sourceLabel = ttp.ttp_source === "ranking_collections"
+        ? "Ranking collections"
+        : "Search reports";
     const warningMessage = ttp.warning_message
-        ? `<p class="diagnostic-warning">${escapeHtml(String(ttp.warning_message))}</p>`
+        ? `<p class="diagnostic-warning compact">${escapeHtml(String(ttp.warning_message))}</p>`
         : "";
-    const sampleHtml = samples.length > 0
-        ? `<pre>${escapeHtml(JSON.stringify(samples, null, 2))}</pre>`
-        : "<p><em>No TTP lookup samples were recorded.</em></p>";
 
     return `
-        <details class="diagnostics-block" open>
-            <summary>TTP diagnostics</summary>
+        <section class="status-card">
+            <div>
+                <h2>MITRE ATT&CK analysis</h2>
+                ${warningMessage}
+            </div>
+            <div class="status-grid">
+                ${renderPreviewField("Status", status)}
+                ${renderPreviewField("Lookups", `${succeeded} / ${attempted} succeeded`)}
+                ${renderPreviewField("Candidate source", enabled ? sourceLabel : "Disabled")}
+                ${renderPreviewField("Tactics found", responseData.top_tactics.length)}
+                ${renderPreviewField("Techniques found", responseData.top_techniques.length)}
+                ${renderPreviewField("Subtechniques found", responseData.top_subtechniques.length)}
+            </div>
+            <button type="button" class="link-button" data-switch-tab="diagnostics">View technical diagnostics</button>
+        </section>
+    `;
+}
+
+function renderDiagnosticsTab(responseData, includeDebug) {
+    if (!includeDebug || !responseData.technical_debug) {
+        diagnosticsOutput.classList.add("empty-state");
+        diagnosticsOutput.innerHTML = `
+            <h3>Technical diagnostics are disabled</h3>
+            <p>Enable 'Include technical debug' in the sidebar to inspect API/parser details.</p>
+        `;
+        return;
+    }
+
+    const technicalDebug = responseData.technical_debug || {};
+    diagnosticsOutput.classList.remove("empty-state");
+    diagnosticsOutput.innerHTML = `
+        <div class="report-document">
+            <h1>Diagnostics</h1>
+            <section class="report-section-card">
+                <h2>Ranking debug</h2>
+                <pre>${escapeHtml(JSON.stringify(technicalDebug.ranking_debug || {}, null, 2))}</pre>
+            </section>
+            <section class="report-section-card">
+                <h2>TTP debug</h2>
+                <pre>${escapeHtml(JSON.stringify(technicalDebug.ttp_debug || {}, null, 2))}</pre>
+            </section>
+            <section class="report-section-card">
+                <h2>Raw samples</h2>
+                <pre>${escapeHtml(JSON.stringify(technicalDebug.raw_samples || {}, null, 2))}</pre>
+            </section>
+        </div>
+    `;
+}
+
+function renderTtpDiagnosticsPanel(responseData) {
+    const ttp = responseData.ttp_analysis || {};
+    const warningMessage = ttp.warning_message
+        ? `<p class="diagnostic-warning compact">${escapeHtml(String(ttp.warning_message))}</p>`
+        : "";
+    return `
+        <section class="report-section-card">
+            <h2>TTP diagnostics summary</h2>
             ${warningMessage}
             <ul>
                 <li><strong>ttp_lookups_attempted:</strong> ${escapeHtml(String(ttp.ttp_lookups_attempted ?? 0))}</li>
                 <li><strong>ttp_lookups_succeeded:</strong> ${escapeHtml(String(ttp.ttp_lookups_succeeded ?? 0))}</li>
                 <li><strong>ttp_eligible_collections:</strong> ${escapeHtml(String(ttp.ttp_eligible_collections ?? 0))}</li>
-                <li><strong>ttp_first_successful_collection_id:</strong> ${formatApiValue(ttp.ttp_first_successful_collection_id)}</li>
-                <li><strong>ttp_first_successful_debug.tactics_count:</strong> ${escapeHtml(String(firstDebug.tactics_count ?? 0))}</li>
                 <li><strong>top_tactics count:</strong> ${escapeHtml(String(responseData.top_tactics.length))}</li>
                 <li><strong>top_techniques count:</strong> ${escapeHtml(String(responseData.top_techniques.length))}</li>
                 <li><strong>top_subtechniques count:</strong> ${escapeHtml(String(responseData.top_subtechniques.length))}</li>
             </ul>
-            <p><strong>ttp_lookup_attempt_samples:</strong></p>
-            ${sampleHtml}
-        </details>
+        </section>
     `;
 }
 
 function renderTtpSections(responseData) {
+    const ttp = responseData.ttp_analysis || {};
+    if (!ttp.enabled) {
+        return "";
+    }
+    const subtechniquesHtml = Array.isArray(responseData.top_subtechniques)
+        && responseData.top_subtechniques.length > 0
+            ? renderSectionCard(
+                "Top MITRE Subtechniques",
+                renderRankingTable(responseData.top_subtechniques || [], "collections"),
+            )
+            : "";
     return `
-        <h2>Top MITRE Tactics</h2>
-        ${renderRankingTable(responseData.top_tactics || [], "collections", "No MITRE tactics were extracted.")}
-        <h2>Top MITRE Techniques</h2>
-        ${renderRankingTable(responseData.top_techniques || [], "collections", "No MITRE techniques were extracted.")}
-        <h2>Top MITRE Subtechniques</h2>
-        ${renderRankingTable(responseData.top_subtechniques || [], "collections", "No MITRE subtechniques were extracted.")}
+        ${renderSectionCard("Top MITRE Tactics", renderRankingTable(responseData.top_tactics || [], "collections", "No MITRE tactics were extracted."))}
+        ${renderSectionCard("Top MITRE Techniques", renderRankingTable(responseData.top_techniques || [], "collections", "No MITRE techniques were extracted."))}
+        ${subtechniquesHtml}
     `;
 }
 
@@ -1736,12 +1881,12 @@ function renderTopTargetsResult(responseData) {
     const fieldsCoverage = responseData.fields_coverage || {};
     const collectionsAnalyzed = Number(responseData.collections_analyzed || 0);
     const rankingSectionsHtml = renderSelectedRankingSections(responseData);
-    const ttpDiagnosticHtml = renderTtpDiagnosticPanel(responseData);
+    const ttpStatusHtml = renderTtpStatusCard(responseData);
     const ttpSectionsHtml = renderTtpSections(responseData);
-    const crossAnalysisHtml = renderCrossAnalysisSections(responseData);
+    const crossAnalysisSummaryHtml = renderCrossAnalysisSummary(responseData);
     const detailLookupHtml = detailLookupsAttempted > 0
         ? `
-        <p>
+        <p class="compact-note">
             <strong>Company detail lookups:</strong>
             ${escapeHtml(String(detailLookupsSucceeded))}/${escapeHtml(String(detailLookupsAttempted))} succeeded
         </p>
@@ -1751,6 +1896,7 @@ function renderTopTargetsResult(responseData) {
     reportOutput.classList.remove("empty-state");
     reportOutput.innerHTML = `
         <h1>Top Targets Ranking — ${escapeHtml(String(responseData.period || ""))}</h1>
+        ${renderMetricChips(responseData)}
         <p>
             <strong>Collections analyzed:</strong> ${escapeHtml(String(responseData.collections_analyzed || 0))} |
             <strong>GTI query:</strong> <code>${escapeHtml(String(responseData.query_used || ""))}</code>
@@ -1774,14 +1920,14 @@ function renderTopTargetsResult(responseData) {
                 <li><strong>Targeted organizations:</strong> ${escapeHtml(String(fieldsCoverage.targeted_organizations ?? 0))} / ${escapeHtml(String(collectionsAnalyzed))} collections</li>
             </ul>
         </details>
-        ${ttpDiagnosticHtml}
+        ${ttpStatusHtml}
         ${detailLookupHtml}
 
         ${rankingSectionsHtml}
 
         ${ttpSectionsHtml}
 
-        ${crossAnalysisHtml}
+        ${crossAnalysisSummaryHtml}
 
         <div class="methodology-note">
             <strong>Methodology:</strong> ${escapeHtml(String(responseData.methodology || ""))}
@@ -1837,12 +1983,16 @@ async function runTopTargetsRanking() {
         ? Number(maxTtpCandidatesRaw)
         : TOP_TARGETS_DEFAULT_TTP_CANDIDATES;
     const ttpQueryFilter = topTargetsTtpQueryFilterField?.value.trim() || null;
+    const includeTtpAnalysis = Boolean(topTargetsIncludeTtpField?.checked);
+    const includeDebug = Boolean(topTargetsIncludeDebugField?.checked);
+    const showRawJson = Boolean(topTargetsShowRawJsonField?.checked);
     const estimate = buildTopTargetsRequestEstimate(
         maxCollections,
         deepOrganizationLookup,
         maxDetailLookups,
         maxTtpCandidates,
         ttpSource,
+        includeTtpAnalysis,
     );
 
     const shouldRun = window.confirm(
@@ -1853,7 +2003,8 @@ async function runTopTargetsRanking() {
         `${estimate.totalRequests} total request(s)\n\n` +
         `Period: ${getTopTargetsPeriodLabel()}\n` +
         `Max collections: ${estimate.maxCollections}\n` +
-        `TTP mode: ${ttpSource === "ranking_collections" ? "Use ranking result collections" : "Search reports for TTP analysis"}`,
+        `MITRE ATT&CK: ${includeTtpAnalysis ? "enabled" : "disabled"}\n` +
+        `TTP mode: ${includeTtpAnalysis ? (ttpSource === "ranking_collections" ? "Use ranking result collections" : "Search reports for TTP analysis") : "disabled"}`,
     );
     if (!shouldRun) {
         updateStatus("Idle", "idle");
@@ -1882,6 +2033,8 @@ async function runTopTargetsRanking() {
                 ttp_source: ttpSource,
                 max_ttp_candidates: maxTtpCandidates,
                 ttp_query_filter: ttpQueryFilter,
+                include_ttp_analysis: includeTtpAnalysis,
+                include_debug: includeDebug,
             }),
         });
 
@@ -1898,9 +2051,13 @@ async function runTopTargetsRanking() {
 
         renderTopTargetsResult(normalizedResponseData);
         renderLiveRankingsFromTopTargets(normalizedResponseData);
+        renderCrossAnalysisTab(normalizedResponseData);
+        renderDiagnosticsTab(normalizedResponseData, includeDebug);
         setTopTargetsDocxState(true);
         switchToTab("report");
-        rawJsonOutput.textContent = JSON.stringify(normalizedResponseData, null, 2);
+        rawJsonOutput.textContent = showRawJson
+            ? JSON.stringify(normalizedResponseData, null, 2)
+            : "Raw JSON is hidden. Enable 'Show raw JSON in UI' in the sidebar to display it here.";
 
         const rankingCount = normalizedResponseData.selected_rankings.length;
         updateStatus("Success", "success");
@@ -2033,6 +2190,13 @@ async function generateReport(event) {
 }
 
 function handleReportOutputClick(event) {
+    const tabSwitch = event.target.closest("[data-switch-tab]");
+    if (tabSwitch) {
+        event.preventDefault();
+        switchToTab(tabSwitch.dataset.switchTab || "report");
+        return;
+    }
+
     const analyzeButton = event.target.closest("[data-analyze-collection-id]");
     if (!analyzeButton) {
         return;
@@ -2040,6 +2204,19 @@ function handleReportOutputClick(event) {
 
     event.preventDefault();
     analyzeSelectedCollection(analyzeButton.dataset.analyzeCollectionId || "");
+}
+
+async function copyRawJsonToClipboard() {
+    const text = rawJsonOutput.textContent || "";
+    if (!text || text === "No response yet.") {
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(text);
+        showMessage("Raw JSON copied.", "success");
+    } catch (_) {
+        showMessage("Could not copy Raw JSON from this browser context.", "error");
+    }
 }
 
 reportTypeField.addEventListener("change", syncTargetRequirement);
@@ -2057,9 +2234,12 @@ topTargetsDeepLookupField?.addEventListener("change", syncTopTargetsDeepLookupCo
     topTargetsTopNField,
     topTargetsMaxCollectionsField,
     topTargetsMaxDetailLookupsField,
+    topTargetsIncludeTtpField,
     topTargetsTtpSourceField,
     topTargetsMaxTtpCandidatesField,
     topTargetsTtpQueryFilterField,
+    topTargetsIncludeDebugField,
+    topTargetsShowRawJsonField,
 ].filter(Boolean).forEach((field) => {
     field.addEventListener("input", updateTopTargetsEstimatePanel);
     field.addEventListener("change", updateTopTargetsEstimatePanel);
@@ -2068,6 +2248,9 @@ intelligencePresetButtons.forEach((button) => {
     button.addEventListener("click", applyIntelligenceQueryPreset);
 });
 reportOutput.addEventListener("click", handleReportOutputClick);
+crossAnalysisOutput?.addEventListener("click", handleReportOutputClick);
+diagnosticsOutput?.addEventListener("click", handleReportOutputClick);
+copyJsonButton?.addEventListener("click", copyRawJsonToClipboard);
 reportForm.addEventListener("submit", generateReport);
 setDownloadState(false);
 syncTopTargetsDeepLookupControls();

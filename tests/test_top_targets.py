@@ -21,7 +21,7 @@ class AggregateTopTargetsTests(unittest.TestCase):
                 "ttp_lookup_attempt_samples": [],
             },
         )
-        self.ttp_patcher.start()
+        self.mock_analyze_top_ttps = self.ttp_patcher.start()
         self.addCleanup(self.ttp_patcher.stop)
 
     def test_estimate_top_ranking_requests(self) -> None:
@@ -106,6 +106,12 @@ class AggregateTopTargetsTests(unittest.TestCase):
         self.assertEqual(result["collections_analyzed"], 2)
         self.assertEqual(result["company_detail_lookups_attempted"], 0)
         self.assertEqual(result["company_detail_lookups_succeeded"], 0)
+        self.assertEqual(result["ttp_analysis"]["enabled"], False)
+        self.assertEqual(result["top_tactics"], [])
+        self.assertNotIn("debug_attribute_keys_frequency", result)
+        self.assertNotIn("debug_sample_collection_fields", result)
+        self.assertNotIn("technical_debug", result)
+        self.mock_analyze_top_ttps.assert_not_called()
 
         industries = {
             item["name"]: item["collection_count"] for item in result["top_industries"]
@@ -308,6 +314,42 @@ class AggregateTopTargetsTests(unittest.TestCase):
         self.assertEqual(result["period"], "April 2024")
 
     @patch("backend.gti_client.intelligence_search")
+    def test_ttp_analysis_only_runs_when_enabled(
+        self,
+        mock_intelligence_search,
+    ) -> None:
+        mock_intelligence_search.return_value = {
+            "status_code": 200,
+            "next_cursor": None,
+            "simplified_preview": [],
+            "raw_data": {"data": []},
+        }
+        self.mock_analyze_top_ttps.return_value = {
+            "enabled": True,
+            "top_tactics": [{"rank": 1, "name": "TA0002 - Execution", "collection_count": 1}],
+            "top_techniques": [],
+            "top_subtechniques": [],
+            "ttp_candidate_search_requests": 1,
+            "max_ttp_candidates": 25,
+            "ttp_lookups_attempted": 25,
+            "ttp_lookups_succeeded": 25,
+            "ttp_eligible_collections": 25,
+            "warning_message": "",
+        }
+
+        result = gti_client.aggregate_top_targets(
+            api_key="test-key",
+            start_year=2024,
+            max_collections=40,
+            include_ttp_analysis=True,
+        )
+
+        self.mock_analyze_top_ttps.assert_called_once()
+        self.assertEqual(result["ttp_analysis"]["enabled"], True)
+        self.assertEqual(result["top_tactics"][0]["name"], "TA0002 - Execution")
+        self.assertEqual(result["api_request_estimate"]["ttp_lookup_requests"], 25)
+
+    @patch("backend.gti_client.intelligence_search")
     def test_selected_rankings_and_field_coverage_are_returned(
         self,
         mock_intelligence_search,
@@ -384,6 +426,7 @@ class AggregateTopTargetsTests(unittest.TestCase):
             api_key="test-key",
             start_year=2024,
             max_collections=1000,
+            include_debug=True,
             selected_rankings=[
                 "targeted_industries",
                 "targeted_regions",

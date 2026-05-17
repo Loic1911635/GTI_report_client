@@ -149,6 +149,8 @@ class TopTargetsRequest(BaseModel):
     ttp_source: str = Field(default="search_reports", description="TTP source mode: search_reports or ranking_collections.")
     max_ttp_candidates: int = Field(default=25, ge=1, le=100, description="Maximum report candidates for MITRE tree lookups.")
     ttp_query_filter: str | None = Field(default=None, description="Optional extra Intelligence Search filter for TTP report candidates.")
+    include_ttp_analysis: bool = Field(default=False, description="Run MITRE ATT&CK TTP analysis.")
+    include_debug: bool = Field(default=False, description="Return technical diagnostics.")
 
 
 class TopTargetsResponse(BaseModel):
@@ -171,8 +173,9 @@ class TopTargetsResponse(BaseModel):
     estimated_api_requests: int = 0
     actual_search_requests: int = 0
     fields_coverage: dict[str, int] = Field(default_factory=dict)
-    debug_attribute_keys_frequency: dict[str, int] = Field(default_factory=dict)
-    debug_sample_collection_fields: list[dict[str, Any]] = Field(default_factory=list)
+    debug_attribute_keys_frequency: dict[str, int] | None = None
+    debug_sample_collection_fields: list[dict[str, Any]] | None = None
+    technical_debug: dict[str, Any] | None = None
     company_detail_lookups_attempted: int
     company_detail_lookups_succeeded: int
     top_industries: list[dict[str, Any]]
@@ -570,7 +573,11 @@ def analyze_collection_workflow(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
-@app.post("/explore/top-targets", response_model=TopTargetsResponse)
+@app.post(
+    "/explore/top-targets",
+    response_model=TopTargetsResponse,
+    response_model_exclude_none=True,
+)
 def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsResponse:
     """Aggregate top targeted industries and companies from GTI collections."""
 
@@ -588,6 +595,8 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             ttp_source=request.ttp_source,
             max_ttp_candidates=request.max_ttp_candidates,
             ttp_query_filter=request.ttp_query_filter,
+            include_ttp_analysis=request.include_ttp_analysis,
+            include_debug=request.include_debug,
         )
         cross_analysis = build_cross_analysis_matrices(
             result.get("collection_preview_fields", [])
@@ -610,8 +619,9 @@ def explore_top_targets_workflow(request: TopTargetsRequest) -> TopTargetsRespon
             estimated_api_requests=int(result.get("estimated_api_requests", 0)),
             actual_search_requests=int(result.get("actual_search_requests", 0)),
             fields_coverage=result.get("fields_coverage", {}),
-            debug_attribute_keys_frequency=result.get("debug_attribute_keys_frequency", {}),
-            debug_sample_collection_fields=result.get("debug_sample_collection_fields", []),
+            debug_attribute_keys_frequency=result.get("debug_attribute_keys_frequency"),
+            debug_sample_collection_fields=result.get("debug_sample_collection_fields"),
+            technical_debug=result.get("technical_debug"),
             company_detail_lookups_attempted=int(
                 result["company_detail_lookups_attempted"]
             ),

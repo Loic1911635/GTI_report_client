@@ -636,6 +636,8 @@ def aggregate_top_targets(
     ttp_source: str = "search_reports",
     max_ttp_candidates: int = DEFAULT_TTP_CANDIDATES,
     ttp_query_filter: str | None = None,
+    include_ttp_analysis: bool = False,
+    include_debug: bool = False,
 ) -> dict[str, Any]:
     """Aggregate top targeted industries and companies from GTI Intelligence Search.
 
@@ -881,27 +883,47 @@ def aggregate_top_targets(
     ranked_industries = rankings.get("targeted_industries", [])
     ranked_companies = rankings.get("targeted_organizations", [])
     top_companies_status = "ok" if ranked_companies else "not enough data"
-    ttp_result = analyze_top_ttps(
-        api_key=normalized_api_key,
-        date_filter=date_query,
-        top_n=top_n,
-        source=ttp_source,
-        max_ttp_candidates=max_ttp_candidates,
-        ttp_query_filter=ttp_query_filter,
-        ranking_collections=collections_analyzed,
-    )
+    if include_ttp_analysis:
+        full_ttp_result = analyze_top_ttps(
+            api_key=normalized_api_key,
+            date_filter=date_query,
+            top_n=top_n,
+            source=ttp_source,
+            max_ttp_candidates=max_ttp_candidates,
+            ttp_query_filter=ttp_query_filter,
+            ranking_collections=collections_analyzed,
+        )
+        full_ttp_result["enabled"] = True
+    else:
+        full_ttp_result = {
+            "enabled": False,
+            "ttp_source": ttp_source,
+            "ttp_query_used": "",
+            "ttp_candidate_search_status_code": 0,
+            "ttp_candidate_search_requests": 0,
+            "max_ttp_candidates": 0,
+            "ttp_lookups_attempted": 0,
+            "ttp_lookups_succeeded": 0,
+            "ttp_eligible_collections": 0,
+            "warning_message": "",
+            "top_tactics": [],
+            "top_techniques": [],
+            "top_subtechniques": [],
+        }
+    ttp_result = _build_public_ttp_analysis(full_ttp_result)
     combined_api_request_estimate = dict(api_request_estimate)
-    combined_api_request_estimate["ttp_candidate_search_requests"] = int(
-        ttp_result.get("ttp_candidate_search_requests", 0)
-    )
-    combined_api_request_estimate["ttp_lookup_requests"] = int(
-        ttp_result.get("max_ttp_candidates", 0)
-    )
-    combined_api_request_estimate["estimated_total_requests"] = (
-        int(api_request_estimate.get("estimated_total_requests", 0))
-        + combined_api_request_estimate["ttp_candidate_search_requests"]
-        + combined_api_request_estimate["ttp_lookup_requests"]
-    )
+    if include_ttp_analysis:
+        combined_api_request_estimate["ttp_candidate_search_requests"] = int(
+            full_ttp_result.get("ttp_candidate_search_requests", 0)
+        )
+        combined_api_request_estimate["ttp_lookup_requests"] = int(
+            full_ttp_result.get("max_ttp_candidates", 0)
+        )
+        combined_api_request_estimate["estimated_total_requests"] = (
+            int(api_request_estimate.get("estimated_total_requests", 0))
+            + combined_api_request_estimate["ttp_candidate_search_requests"]
+            + combined_api_request_estimate["ttp_lookup_requests"]
+        )
     combined_api_request_estimate["total_requests"] = combined_api_request_estimate[
         "estimated_total_requests"
     ]
@@ -936,8 +958,6 @@ def aggregate_top_targets(
         "estimated_api_requests": combined_api_request_estimate["estimated_total_requests"],
         "actual_search_requests": pages_fetched,
         "fields_coverage": fields_coverage,
-        "debug_attribute_keys_frequency": debug_attribute_keys_frequency,
-        "debug_sample_collection_fields": debug_sample_collection_fields,
         "collections_with_targeted_industries": fields_coverage["targeted_industries"],
         "collections_without_targeted_industries": len(collections_analyzed) - fields_coverage["targeted_industries"],
         "unique_industries_count": len(counters.get("targeted_industries", {})),
@@ -960,6 +980,23 @@ def aggregate_top_targets(
             f"search results. {company_methodology}"
         ),
     }
+    if include_debug:
+        result["debug_attribute_keys_frequency"] = debug_attribute_keys_frequency
+        result["debug_sample_collection_fields"] = debug_sample_collection_fields
+        result["technical_debug"] = {
+            "ranking_debug": {
+                "debug_attribute_keys_frequency": debug_attribute_keys_frequency,
+                "debug_sample_collection_fields": debug_sample_collection_fields,
+            },
+            "ttp_debug": full_ttp_result if include_ttp_analysis else ttp_result,
+            "raw_samples": {
+                "collection_preview_fields": collections_analyzed[:10],
+                "ttp_lookup_attempt_samples": full_ttp_result.get(
+                    "ttp_lookup_attempt_samples",
+                    [],
+                ),
+            },
+        }
     return result
 
 
@@ -993,6 +1030,29 @@ def _extract_names_from_field(field: Any) -> list[str]:
             names.extend(_extract_names_from_field(value))
         return _dedupe_preserving_order(names)
     return []
+
+
+def _build_public_ttp_analysis(ttp_result: dict[str, Any]) -> dict[str, Any]:
+    """Return the compact TTP object used by the normal UI response."""
+
+    return {
+        "enabled": bool(ttp_result.get("enabled")),
+        "ttp_source": str(ttp_result.get("ttp_source") or ""),
+        "ttp_query_used": str(ttp_result.get("ttp_query_used") or ""),
+        "ttp_lookups_attempted": _safe_int(ttp_result.get("ttp_lookups_attempted")),
+        "ttp_lookups_succeeded": _safe_int(ttp_result.get("ttp_lookups_succeeded")),
+        "ttp_eligible_collections": _safe_int(ttp_result.get("ttp_eligible_collections")),
+        "warning_message": str(ttp_result.get("warning_message") or ""),
+        "top_tactics": ttp_result.get("top_tactics", [])
+        if isinstance(ttp_result.get("top_tactics"), list)
+        else [],
+        "top_techniques": ttp_result.get("top_techniques", [])
+        if isinstance(ttp_result.get("top_techniques"), list)
+        else [],
+        "top_subtechniques": ttp_result.get("top_subtechniques", [])
+        if isinstance(ttp_result.get("top_subtechniques"), list)
+        else [],
+    }
 
 
 def _fetch_mitre_tree(api_key: str, collection_id: str) -> dict[str, Any]:

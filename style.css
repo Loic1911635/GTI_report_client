@@ -194,6 +194,32 @@ body {
     gap: 7px;
 }
 
+.sidebar-panel {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(248, 252, 252, 0.72);
+    padding: 0;
+    overflow: hidden;
+}
+
+.sidebar-panel summary {
+    padding: 9px 10px;
+    cursor: pointer;
+    color: var(--accent-strong);
+    font-size: 0.78rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
+
+.sidebar-panel > :not(summary) {
+    margin: 0 10px 10px;
+}
+
+.sidebar-panel .field-row {
+    margin-top: 0;
+}
+
 .estimate-panel {
     border: 1px solid rgba(13, 127, 122, 0.18);
     border-radius: var(--radius-sm);
@@ -227,6 +253,11 @@ body {
     background: rgba(217, 95, 95, 0.08);
     color: #8f2f2f;
     font-weight: 700;
+}
+
+.diagnostic-warning.compact {
+    margin: 0;
+    font-size: 0.82rem;
 }
 
 /* ── Mode card ─────────────────────────────────────────── */
@@ -604,10 +635,12 @@ select:focus {
 
 .tab-bar {
     display: flex;
+    gap: 4px;
     border-bottom: 1px solid var(--border);
     background: rgba(255, 255, 255, 0.5);
     padding: 0 20px;
     flex-shrink: 0;
+    overflow-x: auto;
 }
 
 .tab-btn {
@@ -651,6 +684,8 @@ select:focus {
     box-shadow: var(--shadow);
     overflow-wrap: anywhere;
     min-height: 300px;
+    width: min(1120px, 100%);
+    margin: 0 auto;
 }
 
 .empty-state {
@@ -712,6 +747,10 @@ select:focus {
     overflow: hidden;
 }
 
+.report-output .diagnostics-block {
+    display: none;
+}
+
 .report-output summary {
     padding: 9px 13px;
     cursor: pointer;
@@ -754,6 +793,79 @@ select:focus {
 }
 
 .preview-value { font-size: 0.86rem; line-height: 1.5; }
+
+.report-document {
+    display: grid;
+    gap: 14px;
+}
+
+.metric-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 2px 0 4px;
+}
+
+.metric-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 9px;
+    border-radius: 999px;
+    background: rgba(13, 127, 122, 0.08);
+    border: 1px solid rgba(13, 127, 122, 0.16);
+    color: var(--accent-strong);
+    font-size: 0.78rem;
+    font-weight: 800;
+}
+
+.report-section-card,
+.status-card {
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.82);
+}
+
+.report-section-card h2,
+.status-card h2 {
+    margin-top: 0;
+}
+
+.ranking-section-stack {
+    display: grid;
+    gap: 14px;
+}
+
+.status-card {
+    display: grid;
+    gap: 12px;
+}
+
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+}
+
+.link-button {
+    width: fit-content;
+    border: 0;
+    background: transparent;
+    color: var(--accent-strong);
+    font: inherit;
+    font-size: 0.84rem;
+    font-weight: 800;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.compact-note {
+    margin: 0;
+    font-size: 0.86rem;
+    color: var(--text-soft);
+}
 
 /* ── Analysis panel ────────────────────────────────────── */
 
@@ -946,6 +1058,16 @@ select:focus {
     box-shadow: var(--shadow);
     padding: 18px 20px;
     overflow: hidden;
+    width: min(1120px, 100%);
+    margin: 0 auto;
+}
+
+.json-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
 }
 
 #raw-json-output {
@@ -954,7 +1076,11 @@ select:focus {
     line-height: 1.6;
     white-space: pre-wrap;
     color: var(--text-main);
-    overflow-x: auto;
+    overflow: auto;
+    max-height: 72vh;
+    padding: 14px;
+    border-radius: var(--radius-sm);
+    background: rgba(16, 35, 45, 0.06);
 }
 
 /* ── Responsive ────────────────────────────────────────── */

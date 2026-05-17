@@ -229,6 +229,16 @@ def _build_docx_context(
         ranking_result.get("top_subtechniques", [])
     )
     preview_collections = ranking_result.get("collection_preview_fields", [])
+    technical_debug = (
+        ranking_result.get("technical_debug", {})
+        if isinstance(ranking_result.get("technical_debug"), dict)
+        else {}
+    )
+    ranking_debug = (
+        technical_debug.get("ranking_debug", {})
+        if isinstance(technical_debug.get("ranking_debug"), dict)
+        else {}
+    )
     threat_categories = _build_single_field_ranking(
         preview_collections,
         "threat_categories",
@@ -283,12 +293,18 @@ def _build_docx_context(
             else {}
         ),
         "debug_attribute_keys_frequency": (
-            ranking_result.get("debug_attribute_keys_frequency", {})
+            ranking_result.get(
+                "debug_attribute_keys_frequency",
+                ranking_debug.get("debug_attribute_keys_frequency", {}),
+            )
             if include_debug
             else {}
         ),
         "debug_sample_collection_fields": (
-            ranking_result.get("debug_sample_collection_fields", [])
+            ranking_result.get(
+                "debug_sample_collection_fields",
+                ranking_debug.get("debug_sample_collection_fields", []),
+            )
             if include_debug
             else []
         ),
