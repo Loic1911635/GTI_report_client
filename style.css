@@ -1034,6 +1034,84 @@ select:focus {
 
 .chart-area { min-height: 60px; }
 
+.dashboard-document {
+    width: min(1120px, 100%);
+    margin: 0 auto;
+}
+
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin: 14px 0 18px;
+}
+
+.kpi-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(248, 252, 252, 0.82);
+    padding: 12px;
+    min-height: 92px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.kpi-card span {
+    color: var(--text-soft);
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.kpi-card strong {
+    color: var(--accent-strong);
+    font-size: 1.45rem;
+    line-height: 1.1;
+}
+
+.kpi-card small {
+    color: var(--text-soft);
+    font-size: 0.78rem;
+}
+
+.compact-table {
+    margin-bottom: 0;
+}
+
+.table-scroll {
+    overflow-x: auto;
+    width: 100%;
+}
+
+.monitor-table {
+    min-width: 860px;
+}
+
+.monitor-table .name-cell small {
+    display: block;
+    color: var(--text-soft);
+    font-weight: 400;
+    margin-top: 3px;
+}
+
+.table-sort-button {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 800;
+    cursor: pointer;
+    padding: 0;
+}
+
+.table-sort-button:hover {
+    color: var(--accent-strong);
+    text-decoration: underline;
+}
+
 .live-ranking-section + .live-ranking-section {
     margin-top: 18px;
 }

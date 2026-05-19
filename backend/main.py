@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from backend.routes.dtm_dashboard import router as dtm_dashboard_router
 
 from backend.gti_client import (
     GTIClientError,
@@ -70,6 +71,7 @@ app = FastAPI(
     description="Student internship MVP for generating Markdown reports from mock GTI data.",
     version="0.1.0",
 )
+app.include_router(dtm_dashboard_router)
 
 
 class GenerateReportRequest(BaseModel):

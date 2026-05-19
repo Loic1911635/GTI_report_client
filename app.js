@@ -3,8 +3,10 @@
 
 const reportForm = document.getElementById("report-form");
 const apiKeyField = document.getElementById("api_key");
+const apiKeyBlock = apiKeyField?.closest(".form-block");
 const generateButton = document.getElementById("generate-button");
 const reportOutput = document.getElementById("report-output");
+const dtmDashboardOutput = document.getElementById("dtm-dashboard-output");
 const rawJsonOutput = document.getElementById("raw-json-output");
 const crossAnalysisOutput = document.getElementById("cross-analysis-output");
 const diagnosticsOutput = document.getElementById("diagnostics-output");
@@ -39,6 +41,13 @@ const intelligenceSearchButton = document.getElementById("intelligence-search-bu
 const topTargetsFields = document.getElementById("top-targets-fields");
 const topTargetsActions = document.getElementById("top-targets-actions");
 const topTargetsButton = document.getElementById("top-targets-button");
+const dtmDashboardFields = document.getElementById("dtm-dashboard-fields");
+const dtmDashboardActions = document.getElementById("dtm-dashboard-actions");
+const dtmDashboardButton = document.getElementById("dtm-dashboard-button");
+const dtmDashboardSinceField = document.getElementById("dtm_dashboard_since");
+const dtmDashboardUntilField = document.getElementById("dtm_dashboard_until");
+const dtmDashboardMaxPagesField = document.getElementById("dtm_dashboard_max_pages");
+const dtmDashboardIncludeRawField = document.getElementById("dtm_dashboard_include_raw");
 const topTargetsStartYearField = document.getElementById("top_targets_start_year");
 const topTargetsMonthField = document.getElementById("top_targets_month");
 const topTargetsTopNField = document.getElementById("top_targets_top_n");
@@ -70,6 +79,7 @@ const emptyStateText = document.getElementById("empty-state-text");
 const IOC_ENRICHMENT = "IoC Enrichment";
 const INDUSTRY_SNAPSHOT_EXPLORER = "Industry Snapshot Explorer";
 const COMPANY_EXPOSURE_DTM = "Company Exposure / DTM";
+const DTM_DASHBOARD = "DTM Monitor & Alert Dashboard";
 const GTI_INTELLIGENCE_SEARCH = "GTI Intelligence Search";
 const TOP_TARGETS_RANKING = "Top Targets Ranking";
 const TOP_TARGETS_SEARCH_PAGE_SIZE = 40;
@@ -132,6 +142,12 @@ const MODE_META = {
         emptyTitle: "Ready to test DTM",
         emptyText: "Fill in your company details, then click Test DTM Monitors or Test DTM Alerts.",
     },
+    [DTM_DASHBOARD]: {
+        label: "DTM Monitor & Alert Dashboard",
+        description: "Builds a read-only dashboard from existing DTM monitors and alerts using the backend GTI environment key.",
+        emptyTitle: "Ready to load the DTM dashboard",
+        emptyText: "Choose a date range and page limit, then click Run Dashboard.",
+    },
     [GTI_INTELLIGENCE_SEARCH]: {
         label: "GTI Intelligence Search",
         description: "Free-text search across GTI objects — collections, files, and threat actors. Use preset queries or write your own to explore available intelligence.",
@@ -152,8 +168,11 @@ let lastDownloadFormat = "markdown";
 let lastIntelligenceSearchResponse = null;
 let lastCollectionAnalysisResponse = null;
 let lastTopTargetsResponse = null;
+let lastDtmDashboardResponse = null;
 let activeCollectionAnalysisId = "";
 let collectionAnalysisInProgressId = "";
+let dtmMonitorSortKey = "risk_score";
+let dtmMonitorSortDirection = "desc";
 
 function escapeHtml(text) {
     return text
@@ -327,6 +346,12 @@ function setTopTargetsLoadingState(isLoading) {
         topTargetsDocxButton.disabled = isLoading || !lastTopTargetsResponse;
     }
     topTargetsButton.textContent = isLoading ? "Analyzing GTI collections..." : "Run Ranking";
+    updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
+}
+
+function setDtmDashboardLoadingState(isLoading) {
+    dtmDashboardButton.disabled = isLoading;
+    dtmDashboardButton.textContent = isLoading ? "Loading Dashboard..." : "Run Dashboard";
     updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
 }
 
@@ -510,8 +535,14 @@ function syncTargetRequirement() {
     const isIocEnrichment = reportTypeField.value === IOC_ENRICHMENT;
     const isIntelligenceSearch = reportTypeField.value === GTI_INTELLIGENCE_SEARCH;
     const isTopTargets = reportTypeField.value === TOP_TARGETS_RANKING;
-    const isSpecialMode = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch || isTopTargets;
+    const isDtmDashboard = reportTypeField.value === DTM_DASHBOARD;
+    const isSpecialMode = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch || isTopTargets || isDtmDashboard;
 
+    if (apiKeyBlock) {
+        apiKeyBlock.hidden = isDtmDashboard;
+    }
+    apiKeyField.required = !isDtmDashboard;
+    apiKeyField.disabled = isDtmDashboard;
     scopeFields.hidden = isSpecialMode;
     reportSectionsGroup.hidden = isSpecialMode;
     outputFormatGroup.hidden = isSpecialMode;
@@ -523,6 +554,8 @@ function syncTargetRequirement() {
     companyDtmActions.hidden = !isCompanyExposureDtm;
     topTargetsFields.hidden = !isTopTargets;
     topTargetsActions.hidden = !isTopTargets;
+    dtmDashboardFields.hidden = !isDtmDashboard;
+    dtmDashboardActions.hidden = !isDtmDashboard;
 
     targetField.required = (
         isIocEnrichment
@@ -530,6 +563,7 @@ function syncTargetRequirement() {
         && !isCompanyExposureDtm
         && !isIntelligenceSearch
         && !isTopTargets
+        && !isDtmDashboard
     );
     intelligenceQueryField.required = isIntelligenceSearch;
     targetField.placeholder = isIocEnrichment ? "example.com" : "Company, region, or industry";
@@ -1953,6 +1987,356 @@ function renderLiveRankingsFromTopTargets(responseData) {
     companiesSourceBadgeEl.innerHTML = '<span class="badge source-badge">preview-only</span>';
 }
 
+function formatInteger(value) {
+    return Number(value || 0).toLocaleString();
+}
+
+function localDateTimeToRfc3339(value) {
+    if (!value) {
+        return "";
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return "";
+    }
+    return date.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function renderDtmMetricCards(responseData) {
+    const summary = responseData.summary || {};
+    const quota = responseData.quota || {};
+    const cards = [
+        ["Monitors", summary.total_monitors, `${formatInteger(quota.remaining_estimate)} remaining estimate`],
+        ["Alerts", summary.total_alerts, "selected period"],
+        ["High", summary.high_alerts, "severity"],
+        ["Medium", summary.medium_alerts, "severity"],
+        ["Low", summary.low_alerts, "severity"],
+        ["Quota Used", `${Number(quota.used_percent || 0).toFixed(1)}%`, `${formatInteger(quota.monitor_count)} / ${formatInteger(quota.default_monitor_quota)}`],
+    ];
+
+    return `
+        <div class="kpi-grid">
+            ${cards.map(([label, value, hint]) => `
+                <div class="kpi-card">
+                    <span>${escapeHtml(String(label))}</span>
+                    <strong>${escapeHtml(String(value ?? 0))}</strong>
+                    <small>${escapeHtml(String(hint || ""))}</small>
+                </div>
+            `).join("")}
+        </div>
+    `;
+}
+
+function renderDtmBarTable(items, options) {
+    const rows = Array.isArray(items) ? items : [];
+    if (rows.length === 0) {
+        return `<p><em>${escapeHtml(options.emptyMessage || "No data for this chart.")}</em></p>`;
+    }
+
+    const valueKey = options.valueKey;
+    const labelKey = options.labelKey;
+    const maxValue = Math.max(...rows.map((item) => Number(item[valueKey] || 0)), 1);
+
+    return `
+        <table class="ranking-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>${escapeHtml(options.labelTitle || "Name")}</th>
+                    <th>Volume</th>
+                    <th>${escapeHtml(options.valueTitle || "Count")}</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${rows.map((item, index) => {
+                    const value = Number(item[valueKey] || 0);
+                    const pct = Math.round((value / maxValue) * 100);
+                    return `
+                        <tr class="ranking-row">
+                            <td class="rank-cell">${escapeHtml(String(index + 1))}</td>
+                            <td class="name-cell">${escapeHtml(String(item[labelKey] || "Unknown"))}</td>
+                            <td class="bar-cell">
+                                <div class="ranking-bar-wrap">
+                                    <div class="ranking-bar" style="width:${pct}%"></div>
+                                </div>
+                            </td>
+                            <td class="count-cell">${escapeHtml(formatInteger(value))}</td>
+                        </tr>
+                    `;
+                }).join("")}
+            </tbody>
+        </table>
+    `;
+}
+
+function renderDtmCountTable(items, keyName, label) {
+    const rows = Array.isArray(items) ? items : [];
+    if (rows.length === 0) {
+        return "<p><em>No alerts in this category.</em></p>";
+    }
+    return `
+        <table class="ranking-table compact-table">
+            <thead>
+                <tr>
+                    <th>${escapeHtml(label)}</th>
+                    <th>Count</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${rows.map((item) => `
+                    <tr class="ranking-row">
+                        <td class="name-cell">${escapeHtml(String(item[keyName] || "Unknown"))}</td>
+                        <td class="count-cell">${escapeHtml(formatInteger(item.count))}</td>
+                    </tr>
+                `).join("")}
+            </tbody>
+        </table>
+    `;
+}
+
+function renderDtmMonitorTable(responseData) {
+    const monitors = Array.isArray(responseData.monitors) ? [...responseData.monitors] : [];
+    const sortableKeys = new Set(["alert_count", "risk_score", "noise_score", "high"]);
+    const sortKey = sortableKeys.has(dtmMonitorSortKey) ? dtmMonitorSortKey : "risk_score";
+    const direction = dtmMonitorSortDirection === "asc" ? 1 : -1;
+    monitors.sort((a, b) => {
+        const aValue = Number(a[sortKey] || 0);
+        const bValue = Number(b[sortKey] || 0);
+        if (aValue !== bValue) {
+            return (aValue - bValue) * direction;
+        }
+        return String(a.name || "").localeCompare(String(b.name || ""));
+    });
+
+    const headerButton = (key, label) => `
+        <button type="button" class="table-sort-button" data-dtm-sort="${escapeHtml(key)}">
+            ${escapeHtml(label)}${sortKey === key ? (dtmMonitorSortDirection === "asc" ? " ↑" : " ↓") : ""}
+        </button>
+    `;
+
+    if (monitors.length === 0) {
+        return "<p><em>No monitor rows are available.</em></p>";
+    }
+
+    return `
+        <div class="table-scroll">
+            <table class="ranking-table monitor-table">
+                <thead>
+                    <tr>
+                        <th>Monitor</th>
+                        <th>${headerButton("alert_count", "Alerts")}</th>
+                        <th>${headerButton("risk_score", "Risk")}</th>
+                        <th>${headerButton("noise_score", "Noise")}</th>
+                        <th>${headerButton("high", "High")}</th>
+                        <th>Medium</th>
+                        <th>Low</th>
+                        <th>Last Alert</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${monitors.map((item) => `
+                        <tr class="ranking-row">
+                            <td class="name-cell">
+                                <strong>${escapeHtml(String(item.name || "Unknown monitor"))}</strong>
+                                <small>${escapeHtml(String(item.monitor_id || ""))}</small>
+                            </td>
+                            <td class="count-cell">${escapeHtml(formatInteger(item.alert_count))}</td>
+                            <td class="count-cell">${escapeHtml(formatInteger(item.risk_score))}</td>
+                            <td class="count-cell">${escapeHtml(formatInteger(item.noise_score))}</td>
+                            <td class="count-cell">${escapeHtml(formatInteger(item.high))}</td>
+                            <td class="count-cell">${escapeHtml(formatInteger(item.medium))}</td>
+                            <td class="count-cell">${escapeHtml(formatInteger(item.low))}</td>
+                            <td class="count-cell">${escapeHtml(String(item.last_alert_date || "none"))}</td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function renderDtmInactiveTable(items) {
+    const rows = Array.isArray(items) ? items : [];
+    if (rows.length === 0) {
+        return "<p><em>No inactive monitors for this period.</em></p>";
+    }
+    return `
+        <table class="ranking-table compact-table">
+            <thead>
+                <tr>
+                    <th>Monitor</th>
+                    <th>Last Alert</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${rows.slice(0, 20).map((item) => `
+                    <tr class="ranking-row">
+                        <td class="name-cell">${escapeHtml(String(item.monitor_name || "Unknown monitor"))}</td>
+                        <td class="count-cell">${escapeHtml(String(item.last_alert_date || "none"))}</td>
+                    </tr>
+                `).join("")}
+            </tbody>
+        </table>
+    `;
+}
+
+function renderDtmDashboard(responseData) {
+    const charts = responseData.charts || {};
+    const summary = responseData.summary || {};
+    const period = responseData.period || {};
+    const limits = responseData.limits || {};
+    const maxAlerts = Number(limits.max_alerts || 500);
+    const warnings = Array.isArray(responseData.warnings) ? responseData.warnings : [];
+    const warningsHtml = warnings.length > 0
+        ? `<div class="diagnostic-warning compact">${warnings.map((warning) => escapeHtml(String(warning))).join("<br>")}</div>`
+        : "";
+
+    const dashboardHtml = `
+        <div class="report-document dashboard-document">
+            <h1>DTM Monitor & Alert Dashboard</h1>
+            <p>
+                <strong>Period:</strong> ${escapeHtml(String(period.since || ""))} to ${escapeHtml(String(period.until || ""))}
+            </p>
+            <p class="compact-note">Showing up to ${escapeHtml(formatInteger(maxAlerts))} alerts. Increase max_pages to fetch more.</p>
+            ${warningsHtml}
+            ${renderDtmMetricCards(responseData)}
+            <section class="status-card">
+                <div>
+                    <h2>Monitor posture</h2>
+                    <p><strong>Monitors with alerts:</strong> ${escapeHtml(formatInteger(summary.monitors_with_alerts))} | <strong>Inactive:</strong> ${escapeHtml(formatInteger(summary.monitors_without_alerts))}</p>
+                    <p><strong>Top risky monitor:</strong> ${escapeHtml(String(summary.top_risky_monitor || "none"))}</p>
+                    <p><strong>Top noisy monitor:</strong> ${escapeHtml(String(summary.top_noisy_monitor || "none"))}</p>
+                </div>
+            </section>
+            <div class="stats-charts-grid">
+                <section class="stats-chart-panel">
+                    <h2 class="stats-chart-title">Top Monitors by Alert Count</h2>
+                    ${renderDtmBarTable(charts.top_monitors_by_alert_count, {
+                        labelKey: "monitor_name",
+                        valueKey: "alert_count",
+                        valueTitle: "Alerts",
+                        emptyMessage: "No alerts returned for this period.",
+                    })}
+                </section>
+                <section class="stats-chart-panel">
+                    <h2 class="stats-chart-title">Top Monitors by Risk Score</h2>
+                    ${renderDtmBarTable(charts.top_monitors_by_risk_score, {
+                        labelKey: "monitor_name",
+                        valueKey: "risk_score",
+                        valueTitle: "Risk",
+                        emptyMessage: "No risk score was computed for this period.",
+                    })}
+                </section>
+                <section class="stats-chart-panel">
+                    <h2 class="stats-chart-title">Alerts by Severity</h2>
+                    ${renderDtmCountTable(charts.alerts_by_severity, "severity", "Severity")}
+                </section>
+                <section class="stats-chart-panel">
+                    <h2 class="stats-chart-title">Alerts by Type</h2>
+                    ${renderDtmCountTable(charts.alerts_by_type, "type", "Type")}
+                </section>
+                <section class="stats-chart-panel">
+                    <h2 class="stats-chart-title">Alerts by Status</h2>
+                    ${renderDtmCountTable(charts.alerts_by_status, "status", "Status")}
+                </section>
+                <section class="stats-chart-panel">
+                    <h2 class="stats-chart-title">Alerts Timeline</h2>
+                    ${renderDtmBarTable(charts.alerts_timeline, {
+                        labelKey: "date",
+                        valueKey: "count",
+                        labelTitle: "Date",
+                        valueTitle: "Alerts",
+                        emptyMessage: "No dated alerts were returned.",
+                    })}
+                </section>
+                <section class="stats-chart-panel">
+                    <h2 class="stats-chart-title">Noisy Monitors</h2>
+                    ${renderDtmBarTable(charts.noisy_monitors, {
+                        labelKey: "monitor_name",
+                        valueKey: "noise_score",
+                        valueTitle: "Noise",
+                        emptyMessage: "No noisy monitor pattern was detected.",
+                    })}
+                </section>
+                <section class="stats-chart-panel">
+                    <h2 class="stats-chart-title">Inactive Monitors</h2>
+                    ${renderDtmInactiveTable(charts.inactive_monitors)}
+                </section>
+            </div>
+            <section class="report-section-card">
+                <h2>Monitor Table</h2>
+                ${renderDtmMonitorTable(responseData)}
+            </section>
+        </div>
+    `;
+
+    dtmDashboardOutput.classList.remove("empty-state");
+    dtmDashboardOutput.innerHTML = dashboardHtml;
+    reportOutput.classList.remove("empty-state");
+    reportOutput.innerHTML = `
+        <h1>DTM Monitor & Alert Dashboard</h1>
+        ${renderDtmMetricCards(responseData)}
+        <p><strong>Period:</strong> ${escapeHtml(String(period.since || ""))} to ${escapeHtml(String(period.until || ""))}</p>
+        <p class="compact-note">Showing up to ${escapeHtml(formatInteger(maxAlerts))} alerts. Increase max_pages to fetch more.</p>
+        <button type="button" class="link-button" data-switch-tab="dtm-dashboard">Open DTM Dashboard tab</button>
+    `;
+}
+
+async function runDtmDashboard() {
+    clearMessage();
+    setDtmDashboardLoadingState(true);
+    setDownloadState(false);
+    lastGeneratedReport = "";
+
+    const params = new URLSearchParams();
+    const since = localDateTimeToRfc3339(dtmDashboardSinceField?.value || "");
+    const until = localDateTimeToRfc3339(dtmDashboardUntilField?.value || "");
+    const maxPages = Number(dtmDashboardMaxPagesField?.value || 20);
+    const includeRaw = Boolean(dtmDashboardIncludeRawField?.checked);
+    if (since) params.set("since", since);
+    if (until) params.set("until", until);
+    params.set("max_pages", String(maxPages));
+    params.set("include_raw", includeRaw ? "true" : "false");
+
+    try {
+        const response = await fetch(`/dtm/dashboard?${params}`);
+        const responseData = await response.json();
+        if (!response.ok) {
+            throw new Error(responseData.detail || "The backend returned an error.");
+        }
+
+        lastDtmDashboardResponse = responseData;
+        renderDtmDashboard(responseData);
+        switchToTab("dtm-dashboard");
+        rawJsonOutput.textContent = includeRaw
+            ? JSON.stringify(responseData, null, 2)
+            : "Raw JSON is hidden. Enable 'Show raw JSON in UI' in the DTM Dashboard filters to display it here.";
+
+        updateStatus("Success", "success");
+        showMessage(
+            `DTM dashboard loaded: ${formatInteger(responseData.summary?.total_monitors)} monitor(s), ${formatInteger(responseData.summary?.total_alerts)} alert(s).`,
+            "success",
+        );
+    } catch (error) {
+        dtmDashboardOutput.classList.add("empty-state");
+        dtmDashboardOutput.innerHTML = `
+            <h3>DTM dashboard failed</h3>
+            <p>${escapeHtml(error.message || "Unknown error.")}</p>
+        `;
+        reportOutput.classList.add("empty-state");
+        reportOutput.innerHTML = dtmDashboardOutput.innerHTML;
+        rawJsonOutput.textContent = "No valid JSON payload was returned.";
+        updateStatus("Error", "error");
+        showMessage(error.message || "DTM dashboard failed.", "error");
+    } finally {
+        setDtmDashboardLoadingState(false);
+
+        if (!statusPill.classList.contains("success") && !statusPill.classList.contains("error")) {
+            updateStatus("Idle", "idle");
+        }
+    }
+}
+
 async function runTopTargetsRanking() {
     if (!reportForm.reportValidity()) {
         return;
@@ -2098,6 +2482,11 @@ async function generateReport(event) {
         return;
     }
 
+    if (reportTypeField.value === DTM_DASHBOARD) {
+        await runDtmDashboard();
+        return;
+    }
+
     if (reportTypeField.value === GTI_INTELLIGENCE_SEARCH) {
         await searchGtiIntelligence();
         return;
@@ -2224,6 +2613,7 @@ downloadButton.addEventListener("click", downloadCurrentReport);
 explorerButton.addEventListener("click", runSelectedExplorer);
 dtmMonitorsButton.addEventListener("click", testDtmMonitors);
 dtmAlertsButton.addEventListener("click", testDtmAlerts);
+dtmDashboardButton?.addEventListener("click", runDtmDashboard);
 intelligenceSearchButton.addEventListener("click", searchGtiIntelligence);
 topTargetsButton?.addEventListener("click", runTopTargetsRanking);
 topTargetsDocxButton?.addEventListener("click", exportTopRankingDocx);
@@ -2248,6 +2638,21 @@ intelligencePresetButtons.forEach((button) => {
     button.addEventListener("click", applyIntelligenceQueryPreset);
 });
 reportOutput.addEventListener("click", handleReportOutputClick);
+dtmDashboardOutput?.addEventListener("click", (event) => {
+    const sortButton = event.target.closest("[data-dtm-sort]");
+    if (!sortButton || !lastDtmDashboardResponse) {
+        handleReportOutputClick(event);
+        return;
+    }
+    const nextSortKey = sortButton.dataset.dtmSort || "risk_score";
+    if (dtmMonitorSortKey === nextSortKey) {
+        dtmMonitorSortDirection = dtmMonitorSortDirection === "asc" ? "desc" : "asc";
+    } else {
+        dtmMonitorSortKey = nextSortKey;
+        dtmMonitorSortDirection = "desc";
+    }
+    renderDtmDashboard(lastDtmDashboardResponse);
+});
 crossAnalysisOutput?.addEventListener("click", handleReportOutputClick);
 diagnosticsOutput?.addEventListener("click", handleReportOutputClick);
 copyJsonButton?.addEventListener("click", copyRawJsonToClipboard);
