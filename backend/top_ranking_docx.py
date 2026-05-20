@@ -9,7 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from lxml import etree as _etree
 from docx import Document
+from docx.opc.packuri import PackURI as _PackURI
+from docx.opc.part import Part as _Part
 from docx.shared import Inches, Pt
 from docxtpl import DocxTemplate, InlineImage
 
@@ -50,6 +53,208 @@ CROSS_ANALYSIS_LABELS = {
     "timeline_by_collection_type": "Timeline by collection type",
     "source_region_by_targeted_region": "Source region by targeted region",
 }
+
+
+_CHART_CT = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
+_CHART_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
+_CHART_PALETTE = [
+    "0D7F7A", "1A9E98", "0A5F5B", "15B0A8",
+    "086560", "20C4BB", "053E3B", "25D4CA",
+]
+_NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_NS_WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+_NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_NS_C = "http://schemas.openxmlformats.org/drawingml/2006/chart"
+_NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def _xe(text: str) -> str:
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _emu(inches: float) -> int:
+    return round(inches * 914_400)
+
+
+def _build_bar_chart_xml(
+    labels: list[str],
+    values: list[int],
+    title: str,
+    horizontal: bool = True,
+) -> str:
+    n = len(labels)
+    bar_dir = "bar" if horizontal else "col"
+    cat_pos = "l" if horizontal else "b"
+    val_pos = "b" if horizontal else "l"
+    orientation = "maxMin" if horizontal else "minMax"
+    pts_cat = "".join(
+        f'<c:pt idx="{i}"><c:v>{_xe(str(l))}</c:v></c:pt>'
+        for i, l in enumerate(labels)
+    )
+    pts_val = "".join(
+        f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>'
+        for i, v in enumerate(values)
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="{_NS_C}" xmlns:a="{_NS_A}" xmlns:r="{_NS_R}">
+  <c:chart>
+    <c:title>
+      <c:tx><c:rich><a:bodyPr/><a:lstStyle/>
+        <a:p><a:pPr><a:defRPr b="1" sz="1100"/></a:pPr>
+          <a:r><a:rPr lang="en-US" b="1"/><a:t>{_xe(title)}</a:t></a:r>
+        </a:p>
+      </c:rich></c:tx>
+      <c:overlay val="0"/>
+    </c:title>
+    <c:autoTitleDeleted val="0"/>
+    <c:plotArea>
+      <c:barChart>
+        <c:barDir val="{bar_dir}"/>
+        <c:grouping val="clustered"/>
+        <c:varyColors val="0"/>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          <c:spPr>
+            <a:solidFill><a:srgbClr val="0D7F7A"/></a:solidFill>
+            <a:ln><a:solidFill><a:srgbClr val="0A5F5B"/></a:solidFill></a:ln>
+          </c:spPr>
+          <c:dLbls>
+            <c:numFmt formatCode="General" sourceLinked="0"/>
+            <c:showLegendKey val="0"/><c:showVal val="1"/>
+            <c:showCatName val="0"/><c:showSerName val="0"/>
+            <c:showPercent val="0"/><c:showBubbleSize val="0"/>
+          </c:dLbls>
+          <c:cat><c:strRef><c:strCache>
+            <c:ptCount val="{n}"/>{pts_cat}
+          </c:strCache></c:strRef></c:cat>
+          <c:val><c:numRef><c:numCache>
+            <c:formatCode>General</c:formatCode>
+            <c:ptCount val="{n}"/>{pts_val}
+          </c:numCache></c:numRef></c:val>
+        </c:ser>
+        <c:axId val="100"/><c:axId val="101"/>
+      </c:barChart>
+      <c:catAx>
+        <c:axId val="100"/>
+        <c:scaling><c:orientation val="{orientation}"/></c:scaling>
+        <c:delete val="0"/><c:axPos val="{cat_pos}"/>
+        <c:tickLblPos val="nextTo"/><c:crossAx val="101"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="101"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/><c:axPos val="{val_pos}"/>
+        <c:numFmt formatCode="General" sourceLinked="0"/>
+        <c:tickLblPos val="nextTo"/><c:crossAx val="100"/>
+        <c:crossBetween val="between"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:plotVisOnly val="1"/>
+  </c:chart>
+</c:chartSpace>"""
+
+
+def _build_pie_chart_xml(labels: list[str], values: list[int], title: str) -> str:
+    n = len(labels)
+    pts_cat = "".join(
+        f'<c:pt idx="{i}"><c:v>{_xe(str(l))}</c:v></c:pt>'
+        for i, l in enumerate(labels)
+    )
+    pts_val = "".join(
+        f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>'
+        for i, v in enumerate(values)
+    )
+    color_pts = "".join(
+        f'<c:dPt><c:idx val="{i}"/><c:spPr>'
+        f'<a:solidFill><a:srgbClr val="{_CHART_PALETTE[i % len(_CHART_PALETTE)]}"/></a:solidFill>'
+        f"</c:spPr></c:dPt>"
+        for i in range(n)
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="{_NS_C}" xmlns:a="{_NS_A}" xmlns:r="{_NS_R}">
+  <c:chart>
+    <c:title>
+      <c:tx><c:rich><a:bodyPr/><a:lstStyle/>
+        <a:p><a:pPr><a:defRPr b="1" sz="1100"/></a:pPr>
+          <a:r><a:rPr lang="en-US" b="1"/><a:t>{_xe(title)}</a:t></a:r>
+        </a:p>
+      </c:rich></c:tx>
+      <c:overlay val="0"/>
+    </c:title>
+    <c:autoTitleDeleted val="0"/>
+    <c:plotArea>
+      <c:pieChart>
+        <c:varyColors val="1"/>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          {color_pts}
+          <c:dLbls>
+            <c:numFmt formatCode="0%" sourceLinked="0"/>
+            <c:showLegendKey val="0"/><c:showVal val="0"/>
+            <c:showCatName val="1"/><c:showSerName val="0"/>
+            <c:showPercent val="1"/><c:showBubbleSize val="0"/>
+            <c:separator>: </c:separator>
+          </c:dLbls>
+          <c:cat><c:strRef><c:strCache>
+            <c:ptCount val="{n}"/>{pts_cat}
+          </c:strCache></c:strRef></c:cat>
+          <c:val><c:numRef><c:numCache>
+            <c:formatCode>General</c:formatCode>
+            <c:ptCount val="{n}"/>{pts_val}
+          </c:numCache></c:numRef></c:val>
+        </c:ser>
+        <c:firstSliceAng val="0"/>
+      </c:pieChart>
+    </c:plotArea>
+    <c:legend><c:legendPos val="r"/><c:overlay val="0"/></c:legend>
+    <c:plotVisOnly val="1"/>
+  </c:chart>
+</c:chartSpace>"""
+
+
+def _insert_native_chart(
+    document: Document,
+    chart_xml: str,
+    width_inches: float = 6.0,
+    height_inches: float = 3.2,
+) -> None:
+    """Embed a DrawingML native Office chart into a python-docx Document."""
+    chart_count = sum(1 for rel in document.part.rels.values() if _CHART_REL in rel.reltype)
+    chart_idx = chart_count + 1
+
+    chart_part = _Part(
+        partname=_PackURI(f"/word/charts/chart{chart_idx}.xml"),
+        content_type=_CHART_CT,
+        blob=chart_xml.encode("utf-8"),
+        package=document.part.package,
+    )
+    rel_id = document.part.relate_to(chart_part, _CHART_REL)
+
+    cx, cy = _emu(width_inches), _emu(height_inches)
+    drawing_xml = (
+        f'<w:drawing xmlns:w="{_NS_W}">'
+        f'<wp:inline xmlns:wp="{_NS_WP}" distT="0" distB="0" distL="0" distR="0">'
+        f'<wp:extent cx="{cx}" cy="{cy}"/>'
+        f'<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+        f'<wp:docPr id="{1000 + chart_idx}" name="Chart {chart_idx}"/>'
+        f"<wp:cNvGraphicFramePr/>"
+        f'<a:graphic xmlns:a="{_NS_A}">'
+        f'<a:graphicData uri="{_NS_C}">'
+        f'<c:chart xmlns:c="{_NS_C}" xmlns:r="{_NS_R}" r:id="{rel_id}"/>'
+        f"</a:graphicData>"
+        f"</a:graphic>"
+        f"</wp:inline>"
+        f"</w:drawing>"
+    )
+    para = document.add_paragraph()
+    run = para.add_run()
+    run._r.append(_etree.fromstring(drawing_xml))
 
 
 def ensure_default_top_ranking_template(template_path: str | Path) -> Path:
@@ -170,7 +375,6 @@ def generate_top_ranking_docx(
 
     document = Document(rendered_path)
     _append_ranking_tables(document, context)
-    _append_chart_notes(document, context)
     _append_cross_analysis(document, context)
     _append_field_coverage(document, context)
     _append_ttp_diagnostics(document, context)
@@ -692,7 +896,7 @@ def _write_chart_images(charts: Any) -> dict[str, Path]:
 
 
 def _append_ranking_tables(document: Document, context: dict[str, Any]) -> None:
-    """Append ranking tables to the rendered report document."""
+    """Append ranking tables and native charts to the rendered report document."""
 
     document.add_page_break()
     document.add_heading("Rankings", level=1)
@@ -715,29 +919,23 @@ def _append_ranking_tables(document: Document, context: dict[str, Any]) -> None:
             cells[1].text = str(row["name"])
             cells[2].text = str(row["collection_count"])
 
+        chart_rows = rows[:10]
+        labels = [str(r["name"]) for r in chart_rows]
+        values = [_safe_int(r["collection_count"]) for r in chart_rows]
+        try:
+            if ranking_key == "collection_type_distribution":
+                xml = _build_pie_chart_xml(labels, values, ranking_label)
+                _insert_native_chart(document, xml, width_inches=5.0, height_inches=3.2)
+            elif ranking_key == "timeline":
+                xml = _build_bar_chart_xml(labels, values, ranking_label, horizontal=False)
+                _insert_native_chart(document, xml, width_inches=6.0, height_inches=3.2)
+            else:
+                height = max(2.0, min(4.0, len(labels) * 0.32 + 0.8))
+                xml = _build_bar_chart_xml(labels, values, ranking_label, horizontal=True)
+                _insert_native_chart(document, xml, width_inches=6.0, height_inches=height)
+        except Exception:
+            pass
 
-def _append_chart_notes(document: Document, context: dict[str, Any]) -> None:
-    """Append chart images when supplied, otherwise append fallback notes."""
-
-    document.add_heading("Charts", level=1)
-    chart_temp_paths = context.get("_chart_temp_paths", {})
-    for chart_key in (
-        "industry_chart",
-        "targeted_regions_chart",
-        "source_regions_chart",
-        "tags_chart",
-        "collection_type_chart",
-        "timeline_chart",
-    ):
-        document.add_heading(chart_key.replace("_", " ").title(), level=2)
-        chart_path = chart_temp_paths.get(chart_key) if isinstance(chart_temp_paths, dict) else None
-        if chart_path and Path(chart_path).exists():
-            try:
-                document.add_picture(str(chart_path), width=Inches(6.2))
-                continue
-            except Exception:
-                pass
-        document.add_paragraph(context.get(f"{chart_key}_note", "Chart not available."))
 
 
 def _append_cross_analysis(document: Document, context: dict[str, Any]) -> None:
