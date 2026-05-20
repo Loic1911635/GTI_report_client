@@ -144,7 +144,7 @@ const MODE_META = {
     },
     [DTM_DASHBOARD]: {
         label: "DTM Monitor & Alert Dashboard",
-        description: "Builds a read-only dashboard from existing DTM monitors and alerts using the backend GTI environment key.",
+        description: "Builds a read-only dashboard from existing DTM monitors and alerts. Enter your GTI API key or configure GTI_API_KEY in the backend.",
         emptyTitle: "Ready to load the DTM dashboard",
         emptyText: "Choose a date range and page limit, then click Run Dashboard.",
     },
@@ -539,10 +539,10 @@ function syncTargetRequirement() {
     const isSpecialMode = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch || isTopTargets || isDtmDashboard;
 
     if (apiKeyBlock) {
-        apiKeyBlock.hidden = isDtmDashboard;
+        apiKeyBlock.hidden = false;
     }
     apiKeyField.required = !isDtmDashboard;
-    apiKeyField.disabled = isDtmDashboard;
+    apiKeyField.disabled = false;
     scopeFields.hidden = isSpecialMode;
     reportSectionsGroup.hidden = isSpecialMode;
     outputFormatGroup.hidden = isSpecialMode;
@@ -2293,8 +2293,10 @@ async function runDtmDashboard() {
     const until = localDateTimeToRfc3339(dtmDashboardUntilField?.value || "");
     const maxPages = Number(dtmDashboardMaxPagesField?.value || 20);
     const includeRaw = Boolean(dtmDashboardIncludeRawField?.checked);
+    const apiKey = apiKeyField.value.trim();
     if (since) params.set("since", since);
     if (until) params.set("until", until);
+    if (apiKey) params.set("api_key", apiKey);
     params.set("max_pages", String(maxPages));
     params.set("include_raw", includeRaw ? "true" : "false");
 
