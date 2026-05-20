@@ -34,12 +34,16 @@ def get_dtm_dashboard(
     until: str | None = Query(default=None),
     max_pages: int = Query(default=20, ge=1, le=100),
     include_raw: bool = Query(default=False),
+    api_key: str | None = Query(default=None),
 ) -> dict[str, Any]:
     """Construit un dashboard DTM read-only a partir des monitors et alertes existants."""
 
-    api_key = (os.environ.get("GTI_API_KEY") or "").strip()
+    api_key = (api_key or os.environ.get("GTI_API_KEY") or "").strip()
     if not api_key:
-        raise HTTPException(status_code=500, detail="GTI_API_KEY is not configured.")
+        raise HTTPException(
+            status_code=500,
+            detail="A GTI API key is required via the api_key query parameter or the GTI_API_KEY environment variable.",
+        )
     logger.info(
         "DTM dashboard using GTI_API_KEY length=%s sha256_prefix=%s",
         len(api_key),
