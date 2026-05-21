@@ -47,7 +47,7 @@
                             <option value="Industry Snapshot Explorer">Industry Snapshot Explorer</option>
                             <option value="Company Exposure / DTM">Company Exposure / DTM</option>
                             <option value="DTM Monitor &amp; Alert Dashboard">DTM Monitor &amp; Alert Dashboard</option>
-                            <option value="IoC Stream Report">IoC Stream Report</option>
+                            <option value="Recent IoC Stream Sample Report">Recent IoC Stream Sample Report</option>
                             <option value="GTI Intelligence Search">GTI Intelligence Search</option>
                             <option value="Top Targets Ranking">Top Targets Ranking</option>
                         </select>
@@ -231,30 +231,19 @@
                     <div id="top-targets-estimate" class="estimate-panel" aria-live="polite"></div>
                 </div>
 
-                <!-- IoC Stream Report fields -->
+                <!-- Recent IoC Stream Sample Report fields -->
                 <div id="ioc-stream-fields" class="form-block" hidden>
                     <details class="sidebar-panel" open>
-                        <summary>Stream filters</summary>
+                        <summary>Stream sample</summary>
                         <label class="field">
-                            <span>Limit</span>
-                            <select id="ioc_stream_limit" name="ioc_stream_limit">
-                                <option value="10">10</option>
-                                <option value="25">25</option>
-                                <option value="40" selected>40</option>
-                                <option value="50">50</option>
-                                <option value="100">100</option>
+                            <span>Pages to fetch</span>
+                            <select id="ioc_stream_pages_to_fetch" name="ioc_stream_pages_to_fetch">
+                                <option value="1">1 page</option>
+                                <option value="2">2 pages</option>
+                                <option value="5" selected>5 pages</option>
+                                <option value="10">10 pages</option>
                             </select>
                         </label>
-                        <div class="field-row">
-                            <label class="field">
-                                <span>Start Date</span>
-                                <input id="ioc_stream_start_date" name="ioc_stream_start_date" type="date">
-                            </label>
-                            <label class="field">
-                                <span>End Date</span>
-                                <input id="ioc_stream_end_date" name="ioc_stream_end_date" type="date">
-                            </label>
-                        </div>
                         <label class="field">
                             <span>Entity Type</span>
                             <select id="ioc_stream_entity_type" name="ioc_stream_entity_type">
@@ -273,14 +262,9 @@
                                 <option value="hunting">Hunting</option>
                             </select>
                         </label>
-                        <label class="checkbox-option" for="ioc_stream_enrich">
-                            <input id="ioc_stream_enrich" name="ioc_stream_enrich" type="checkbox">
-                            <span>Enrich top 10 indicators for risk scoring</span>
-                        </label>
-                        <label class="checkbox-option" for="ioc_stream_descriptors_only">
-                            <input id="ioc_stream_descriptors_only" name="ioc_stream_descriptors_only" type="checkbox">
-                            <span>Descriptors only</span>
-                        </label>
+                        <div class="setting-note">
+                            <strong>Risk scoring:</strong> Enrich all returned IoCs
+                        </div>
                     </details>
                     <details class="sidebar-panel">
                         <summary>Export</summary>
@@ -288,7 +272,7 @@
                     </details>
                     <div class="estimate-panel">
                         <strong>Read-only mode:</strong>
-                        Fetches up to the selected IoC Stream limit in pages of 40. Enrichment adds up to 10 read-only lookup calls. Date selections are reported, but local post-filtering is not yet implemented.
+                        Fetches the requested recent IoC Stream pages. Risk scoring requires enrichment and may generate one API lookup per unique IoC.
                     </div>
                 </div>
 
@@ -409,7 +393,7 @@
                         <button id="dtm-dashboard-button" type="button" class="generate-button secondary-button btn-full">Run Dashboard</button>
                     </div>
                     <div id="ioc-stream-actions" hidden>
-                        <button id="ioc-stream-button" type="button" class="generate-button secondary-button btn-full">Generate IoC Stream Report</button>
+                <button id="ioc-stream-button" type="button" class="generate-button secondary-button btn-full">Generate Recent IoC Stream Sample Report</button>
                     </div>
                 </div>
 
@@ -439,7 +423,7 @@
                 <button class="tab-btn active" data-tab="report" role="tab">Report</button>
                 <button class="tab-btn" data-tab="rankings" role="tab">Live Rankings</button>
                 <button class="tab-btn" data-tab="dtm-dashboard" role="tab">DTM Dashboard</button>
-                <button class="tab-btn" data-tab="ioc-stream" role="tab">IoC Stream Report</button>
+                <button class="tab-btn" data-tab="ioc-stream" role="tab">Recent IoC Stream Sample</button>
                 <button class="tab-btn" data-tab="cross-analysis" role="tab">Cross-analysis</button>
                 <button class="tab-btn" data-tab="diagnostics" role="tab">Diagnostics</button>
                 <button class="tab-btn" data-tab="json" role="tab">Raw JSON</button>
@@ -492,11 +476,11 @@
                 </article>
             </div>
 
-            <!-- Tab: IoC Stream Report -->
+            <!-- Tab: Recent IoC Stream Sample Report -->
             <div class="tab-panel" id="tab-ioc-stream" role="tabpanel" hidden>
                 <article id="ioc-stream-output" class="report-output empty-state">
-                    <h3>IoC Stream Report is empty</h3>
-                    <p>Select the IoC Stream Report mode and generate a report.</p>
+                    <h3>Recent IoC Stream Sample Report is empty</h3>
+                    <p>Select the Recent IoC Stream Sample Report mode and generate a report.</p>
                 </article>
             </div>
 

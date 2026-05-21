@@ -246,6 +246,19 @@ body {
     font-weight: 700;
 }
 
+.setting-note {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: #fff;
+    font-size: 0.86rem;
+    line-height: 1.35;
+}
+
+.setting-note strong {
+    color: var(--accent-strong);
+}
+
 .diagnostic-warning {
     margin: 8px 0 10px;
     padding: 9px 11px;

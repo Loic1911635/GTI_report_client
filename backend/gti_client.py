@@ -8,7 +8,7 @@ import calendar
 import re
 from typing import Any
 from datetime import datetime, timezone
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import requests
 
@@ -30,9 +30,15 @@ DEFAULT_TTP_CANDIDATES = 25
 MAX_TTP_CANDIDATES = 100
 MAX_SAFE_DTM_PAGES = 5
 DEFAULT_IOC_STREAM_LIMIT = 40
-DEFAULT_IOC_STREAM_ENRICHMENT_LIMIT = 10
 IOC_STREAM_API_PAGE_LIMIT = 40
-MAX_IOC_STREAM_LIMIT = 100
+MAX_IOC_STREAM_LIMIT = 500
+DEFAULT_IOC_STREAM_PAGES_TO_FETCH = 5
+MAX_IOC_STREAM_PAGES_TO_FETCH = 10
+IOC_STREAM_ALLOWED_PAGES_TO_FETCH = {1, 2, 5, 10}
+IOC_STREAM_SAMPLE_WARNING = (
+    "IoC Stream is chronological. This report summarizes the recent pages returned "
+    "by the API, not a guaranteed complete time window."
+)
 DEFAULT_INTELLIGENCE_SEARCH_LIMIT = 10
 MAX_INTELLIGENCE_SEARCH_LIMIT = 40
 DEFAULT_TOP_TARGETS_MAX_DETAIL_LOOKUPS = 0
@@ -455,20 +461,21 @@ def intelligence_search(
 
 def fetch_ioc_stream(
     api_key: str,
-    limit: int = DEFAULT_IOC_STREAM_LIMIT,
+    limit: int | None = None,
     entity_type: str = "all",
     origin: str = "all",
     descriptors_only: bool = False,
     cursor: str | None = None,
     order: str = "date",
+    pages_to_fetch: int = DEFAULT_IOC_STREAM_PAGES_TO_FETCH,
+    max_pages: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    time_window: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch a bounded IoC Stream window from GTI without enriching indicators."""
+    """Fetch recent chronological IoC Stream pages without enriching indicators."""
 
     normalized_api_key = api_key.strip()
-    normalized_start_date = _normalize_ioc_stream_date(start_date, "start_date")
-    normalized_end_date = _normalize_ioc_stream_date(end_date, "end_date")
     normalized_entity_type = _normalize_ioc_stream_choice(
         entity_type,
         IOC_STREAM_ENTITY_TYPES,
@@ -483,12 +490,18 @@ def fetch_ioc_stream(
 
     if not normalized_api_key:
         raise ValueError("A GTI/VirusTotal API key is required for IoC Stream.")
-    if limit < 1:
-        raise ValueError("The IoC Stream limit must be at least 1.")
     if order and order != "date":
         raise ValueError("The IoC Stream order must be 'date'.")
+    # max_pages is accepted as a legacy alias while the UI moves to pages_to_fetch.
+    requested_pages = max_pages if max_pages is not None else pages_to_fetch
+    if requested_pages not in IOC_STREAM_ALLOWED_PAGES_TO_FETCH:
+        raise ValueError(
+            "The IoC Stream pages_to_fetch value must be one of: 1, 2, 5, 10."
+        )
+    if limit is not None and limit < 1:
+        raise ValueError("The IoC Stream compatibility limit must be at least 1.")
 
-    normalized_limit = min(limit, MAX_IOC_STREAM_LIMIT)
+    normalized_pages_to_fetch = requested_pages
     filters: list[str] = []
     if normalized_entity_type != "all":
         filters.append(f"entity_type:{normalized_entity_type}")
@@ -503,113 +516,182 @@ def fetch_ioc_stream(
         base_params["filter"] = " ".join(filters)
     request_params: dict[str, Any] = {
         **base_params,
-        "requested_limit": normalized_limit,
+        "pages_to_fetch": normalized_pages_to_fetch,
         "api_page_limit": IOC_STREAM_API_PAGE_LIMIT,
     }
+    if limit is not None:
+        request_params["compatibility_limit"] = limit
+    if time_window or start_date or end_date:
+        request_params["ignored_date_filters"] = {
+            "time_window": time_window,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
     if normalized_cursor:
         request_params["cursor"] = normalized_cursor
-    date_filtering = _build_ioc_stream_date_filtering_metadata(
-        normalized_start_date,
-        normalized_end_date,
-    )
 
     if normalized_api_key.casefold() in {"mock", "sample", "demo"}:
-        payload = _filter_mock_ioc_stream_payload(
+        payload, collection_metadata = _filter_mock_ioc_stream_payload(
             MOCK_IOC_STREAM_PAYLOAD,
-            limit=normalized_limit,
             entity_type=normalized_entity_type,
             origin=normalized_origin,
+            pages_to_fetch=normalized_pages_to_fetch,
         )
         return {
             "status_code": 200,
             "total_collected": len(_extract_api_items(payload)),
             "next_cursor": None,
             "raw_data": payload,
-            "date_filtering": date_filtering,
+            "collection": {
+                **collection_metadata,
+                "requested_pages": normalized_pages_to_fetch,
+                "page_size": IOC_STREAM_API_PAGE_LIMIT,
+            },
             "endpoint_results": [
                 {
                     "endpoint_name": "ioc_stream_mock",
                     "http_status": 200,
                     "request_params": {
                         **base_params,
-                        "limit": min(normalized_limit, IOC_STREAM_API_PAGE_LIMIT),
+                        "limit": IOC_STREAM_API_PAGE_LIMIT,
+                    },
+                }
+            ],
+            "page_diagnostics": [
+                {
+                    "page_number": 1,
+                    "http_status": 200,
+                    "raw_page_item_count": len(_extract_api_items(payload)),
+                    "next_cursor_found": False,
+                    "next_link_found": False,
+                    "request_url": VIRUSTOTAL_IOC_STREAM_URL,
+                    "request_params": {
+                        **base_params,
+                        "limit": IOC_STREAM_API_PAGE_LIMIT,
                     },
                 }
             ],
             "request_params": request_params,
+            "warnings": [IOC_STREAM_SAMPLE_WARNING],
         }
 
     collected_items: list[dict[str, Any]] = []
     endpoint_results: list[dict[str, Any]] = []
+    page_diagnostics: list[dict[str, Any]] = []
     page_payloads: list[Any] = []
     current_cursor = normalized_cursor
+    current_url = VIRUSTOTAL_IOC_STREAM_URL
     next_cursor: str | None = None
     final_status_code = 0
     warnings: list[str] = []
+    stopped_reason = "requested_pages_reached"
+    seen_page_tokens: set[str] = set()
 
-    while len(collected_items) < normalized_limit:
-        page_limit = min(
-            normalized_limit - len(collected_items),
-            IOC_STREAM_API_PAGE_LIMIT,
-        )
-        params = {**base_params, "limit": page_limit}
-        if current_cursor:
+    for page_number in range(1, normalized_pages_to_fetch + 1):
+        request_uses_base_url = current_url == VIRUSTOTAL_IOC_STREAM_URL
+        params = {**base_params, "limit": IOC_STREAM_API_PAGE_LIMIT} if request_uses_base_url else None
+        if params is not None and current_cursor:
             params["cursor"] = current_cursor
 
         endpoint_result = _probe_json_endpoint(
             api_key=normalized_api_key,
-            url=VIRUSTOTAL_IOC_STREAM_URL,
+            url=current_url,
             params=params,
             endpoint_name="ioc_stream",
         )
-        endpoint_result = {**endpoint_result, "request_params": params}
+        endpoint_result = {**endpoint_result, "request_params": params or {}}
         endpoint_results.append(endpoint_result)
         payload = endpoint_result["raw_json"]
         final_status_code = int(endpoint_result["http_status"])
 
         if final_status_code != 200:
-            if collected_items:
-                warnings.append(
-                    f"IoC Stream pagination stopped after HTTP {final_status_code}."
-                )
-                final_status_code = 200
-                break
+            page_diagnostics.append(
+                {
+                    "page_number": page_number,
+                    "http_status": final_status_code,
+                    "raw_page_item_count": len(_extract_api_items(payload)),
+                    "next_cursor_found": False,
+                    "next_link_found": False,
+                    "request_url": current_url,
+                    "request_params": params or {},
+                }
+            )
             return {
                 "status_code": final_status_code,
-                "total_collected": 0,
+                "total_collected": len(collected_items),
                 "next_cursor": None,
                 "raw_data": payload,
-                "date_filtering": date_filtering,
                 "endpoint_results": endpoint_results,
+                "page_diagnostics": page_diagnostics,
                 "request_params": request_params,
-                "warnings": warnings,
+                "warnings": [IOC_STREAM_SAMPLE_WARNING, *warnings],
             }
 
         page_payloads.append(payload)
         page_items = _extract_api_items(payload)
-        remaining_slots = normalized_limit - len(collected_items)
-        collected_items.extend(page_items[:remaining_slots])
+        collected_items.extend(page_items)
 
         next_cursor = _extract_next_cursor(payload)
-        if not next_cursor:
-            next_link_url = _extract_next_link_from_headers(
-                endpoint_result.get("response_headers", {})
+        next_link_url = _normalize_ioc_stream_next_url(
+            _extract_next_link_from_payload(payload) or _extract_next_link_from_headers(
+            endpoint_result.get("response_headers", {})
             )
-            if next_link_url:
-                next_cursor = _extract_cursor_from_url(next_link_url)
+        )
+        if not next_cursor and next_link_url:
+            next_cursor = _extract_cursor_from_url(next_link_url)
+
+        page_diagnostics.append(
+            {
+                "page_number": page_number,
+                "http_status": final_status_code,
+                "raw_page_item_count": len(page_items),
+                "next_cursor_found": bool(next_cursor),
+                "next_link_found": bool(next_link_url),
+                "request_url": current_url,
+                "request_params": params or {},
+            }
+        )
 
         if not next_cursor or not page_items:
-            break
+            if next_link_url:
+                page_token = next_link_url
+                if page_token in seen_page_tokens:
+                    stopped_reason = "pagination_loop_detected"
+                    break
+                seen_page_tokens.add(page_token)
+                current_url = next_link_url
+                current_cursor = ""
+                continue
+            else:
+                stopped_reason = "no_more_pages"
+                break
 
+        page_token = f"cursor:{next_cursor}"
+        if page_token in seen_page_tokens:
+            stopped_reason = "pagination_loop_detected"
+            break
+        seen_page_tokens.add(page_token)
+        current_url = VIRUSTOTAL_IOC_STREAM_URL
         current_cursor = next_cursor
+
+    collection_metadata = _build_ioc_stream_collection_metadata(
+        items=collected_items,
+        pages_fetched=len(endpoint_results),
+        requested_pages=normalized_pages_to_fetch,
+        page_size=IOC_STREAM_API_PAGE_LIMIT,
+        stopped_reason=stopped_reason,
+    )
+    collection_metadata["page_diagnostics"] = page_diagnostics
+    warnings = [IOC_STREAM_SAMPLE_WARNING, *warnings]
 
     return {
         "status_code": final_status_code,
         "total_collected": len(collected_items),
         "next_cursor": next_cursor,
         "raw_data": {"data": collected_items, "pages": page_payloads},
-        "date_filtering": date_filtering,
+        "collection": collection_metadata,
         "endpoint_results": endpoint_results,
+        "page_diagnostics": page_diagnostics,
         "request_params": request_params,
         "warnings": warnings,
     }
@@ -754,6 +836,7 @@ def enrich_ioc_indicator(api_key: str, indicator: dict[str, Any]) -> dict[str, A
         suspicious=suspicious,
         reputation=reputation,
         fallback_risk=str(enriched_indicator.get("severity") or "Unknown"),
+        has_risk_context=bool(enrichment.get("has_risk_context")),
     )
 
     enriched_indicator.update(
@@ -783,6 +866,7 @@ def classify_enriched_ioc_risk(
     suspicious: int,
     reputation: int | float | None,
     fallback_risk: str = "Unknown",
+    has_risk_context: bool = False,
 ) -> dict[str, str]:
     """Classify an enriched IoC from VT/GTI analysis stats and reputation."""
 
@@ -803,6 +887,8 @@ def classify_enriched_ioc_risk(
         }
     if reputation is not None and reputation < 0:
         return {"risk": "Low", "recommended_action": "Monitor"}
+    if has_risk_context:
+        return {"risk": "Low", "recommended_action": "Monitor"}
 
     fallback = fallback_risk if fallback_risk in IOC_STREAM_RISK_ORDER else "Unknown"
     if fallback == "High":
@@ -821,26 +907,32 @@ def build_ioc_stream_report(
     stream_result: dict[str, Any],
     api_key: str | None = None,
     enrich: bool = False,
-    enrichment_limit: int = DEFAULT_IOC_STREAM_ENRICHMENT_LIMIT,
+    enrichment_limit: int | None = None,
 ) -> dict[str, Any]:
     """Build client-friendly IoC Stream metrics and summaries."""
 
     payload = stream_result.get("raw_data")
-    indicators = [
+    raw_indicators = [
         normalize_ioc_stream_item(item)
         for item in _extract_api_items(payload)
     ]
+    indicators, duplicate_count = _dedupe_ioc_stream_indicators(raw_indicators)
     enrichment_attempted = 0
     enrichment_succeeded = 0
     enrichment_errors = 0
+    requested_enrichment_limit = (
+        len(indicators)
+        if enrichment_limit is None
+        else max(enrichment_limit, 0)
+    )
+    actual_enrichment_limit = (
+        min(requested_enrichment_limit, len(indicators))
+        if enrich and api_key and indicators
+        else 0
+    )
 
     if enrich and api_key and indicators:
-        effective_enrichment_limit = min(
-            max(enrichment_limit, 0),
-            DEFAULT_IOC_STREAM_ENRICHMENT_LIMIT,
-            len(indicators),
-        )
-        for index in range(effective_enrichment_limit):
+        for index in range(actual_enrichment_limit):
             enrichment_attempted += 1
             indicators[index] = enrich_ioc_indicator(api_key, indicators[index])
             if indicators[index].get("enrichment_status") == "success":
@@ -848,6 +940,46 @@ def build_ioc_stream_report(
             else:
                 enrichment_errors += 1
 
+    collection_metadata = dict(stream_result.get("collection", {}))
+    page_diagnostics = stream_result.get(
+        "page_diagnostics",
+        collection_metadata.get("page_diagnostics", []),
+    )
+    diagnostics = {
+        "page_diagnostics": page_diagnostics if isinstance(page_diagnostics, list) else [],
+        "duplicate_count": duplicate_count,
+        "duplicates_removed": duplicate_count,
+        "unique_ioc_count": len(indicators),
+        "raw_ioc_count": len(raw_indicators),
+        "stopped_reason": collection_metadata.get("stopped_reason", "unknown"),
+    }
+    collection_metadata["total_collected"] = len(indicators)
+    collection_metadata["total_enriched"] = enrichment_succeeded
+    collection_metadata["unique_ioc_count"] = len(indicators)
+    collection_metadata["duplicate_count"] = duplicate_count
+    collection_metadata["duplicates_removed"] = duplicate_count
+    collection_metadata["raw_ioc_count"] = len(raw_indicators)
+    collection_metadata["page_diagnostics"] = diagnostics["page_diagnostics"]
+    collection_metadata.setdefault(
+        "pages_fetched",
+        len(stream_result.get("endpoint_results", [])),
+    )
+    if not collection_metadata.get("earliest_timestamp") or not collection_metadata.get(
+        "latest_timestamp"
+    ):
+        timestamps = [
+            item_datetime
+            for item_datetime in (
+                _parse_ioc_stream_datetime(indicator.get("matched_date"))
+                for indicator in indicators
+            )
+            if item_datetime is not None
+        ]
+        if timestamps:
+            collection_metadata["earliest_timestamp"] = min(timestamps).isoformat()
+            collection_metadata["latest_timestamp"] = max(timestamps).isoformat()
+
+    analytics = build_ioc_stream_analytics(indicators)
     total = len(indicators)
     entity_counts = _count_ioc_field(indicators, "entity_type")
     risk_counts = _count_ioc_field(indicators, "severity")
@@ -872,6 +1004,13 @@ def build_ioc_stream_report(
         "unknown_risk": risk_counts.get("Unknown", 0),
         "main_entity_type": main_entity_type,
         "main_source_type": main_source_type,
+        "pages_fetched": collection_metadata.get("pages_fetched", 0),
+        "total_enriched": enrichment_succeeded,
+        "raw_ioc_count": len(raw_indicators),
+        "unique_ioc_count": len(indicators),
+        "duplicates_removed": duplicate_count,
+        "earliest_timestamp": collection_metadata.get("earliest_timestamp"),
+        "latest_timestamp": collection_metadata.get("latest_timestamp"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -888,6 +1027,8 @@ def build_ioc_stream_report(
         },
         "top_indicators": sorted_indicators[:10],
         "business_summary": build_business_summary(summary),
+        "analytics": analytics,
+        "collection": collection_metadata,
         "definitions": IOC_STREAM_DEFINITIONS,
         "indicators": indicators,
         "technical_details": {
@@ -896,18 +1037,61 @@ def build_ioc_stream_report(
             "request_params": stream_result.get("request_params", {}),
             "endpoint_results": stream_result.get("endpoint_results", []),
             "warnings": stream_result.get("warnings", []),
-            "date_filtering": stream_result.get(
-                "date_filtering",
-                _build_ioc_stream_date_filtering_metadata(None, None),
-            ),
+            "collection": collection_metadata,
+            "diagnostics": diagnostics,
             "enrichment": {
                 "enabled": bool(enrich),
-                "limit": DEFAULT_IOC_STREAM_ENRICHMENT_LIMIT,
                 "attempted": enrichment_attempted,
                 "succeeded": enrichment_succeeded,
                 "errors": enrichment_errors,
+                "requested_limit": requested_enrichment_limit,
+                "actual_limit": actual_enrichment_limit,
             },
         },
+    }
+
+
+def _dedupe_ioc_stream_indicators(
+    indicators: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Keep the first indicator for each entity_type + value pair."""
+
+    unique_indicators: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str]] = set()
+    duplicate_count = 0
+
+    for indicator in indicators:
+        entity_type = str(indicator.get("entity_type") or "Unknown").strip().casefold()
+        value = str(indicator.get("value") or "").strip().casefold()
+        dedupe_key = (entity_type, value)
+        if dedupe_key in seen_keys:
+            duplicate_count += 1
+            continue
+        seen_keys.add(dedupe_key)
+        unique_indicators.append(indicator)
+
+    return unique_indicators, duplicate_count
+
+
+def build_ioc_stream_analytics(indicators: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build analyst cross-analysis from successfully enriched indicators only."""
+
+    enriched_indicators = [
+        indicator
+        for indicator in indicators
+        if indicator.get("enrichment_status") == "success"
+    ]
+    return {
+        "source": "enriched_indicators_only",
+        "enriched_indicator_count": len(enriched_indicators),
+        "highest_risk_by_ioc_type": _build_ioc_type_risk_rows(enriched_indicators),
+        "top_dangerous_indicators": _build_top_dangerous_ioc_rows(enriched_indicators),
+        "risk_distribution": _build_risk_distribution_rows(enriched_indicators),
+        "ioc_type_distribution": _build_ioc_type_distribution_rows(enriched_indicators),
+        "recommended_action_distribution": _build_recommended_action_distribution_rows(
+            enriched_indicators
+        ),
+        "business_insights": _build_ioc_business_insights(enriched_indicators),
     }
 
 
@@ -2627,6 +2811,8 @@ def _extract_next_cursor(payload: Any) -> str | None:
         return None
 
     next_link = links.get("next")
+    if isinstance(next_link, dict):
+        next_link = _first_present(next_link, ("href", "url", "link"))
     if not isinstance(next_link, str) or not next_link.strip():
         return None
 
@@ -2635,9 +2821,33 @@ def _extract_next_cursor(payload: Any) -> str | None:
     if cursor_values and cursor_values[0]:
         return cursor_values[0]
 
-    if "http" not in next_link.casefold():
-        return next_link
+    return None
 
+
+def _normalize_ioc_stream_next_url(url: str | None) -> str | None:
+    """Return an absolute next-page URL for IoC Stream pagination."""
+
+    if not url:
+        return None
+    normalized_url = str(url).strip()
+    if not normalized_url:
+        return None
+    return urljoin(VIRUSTOTAL_IOC_STREAM_URL, normalized_url)
+
+
+def _extract_next_link_from_payload(payload: Any) -> str | None:
+    """Extract a rel=next URL from a payload links object when available."""
+
+    if not isinstance(payload, dict):
+        return None
+    links = payload.get("links")
+    if not isinstance(links, dict):
+        return None
+    next_link = links.get("next")
+    if isinstance(next_link, dict):
+        next_link = _first_present(next_link, ("href", "url", "link"))
+    if isinstance(next_link, str) and next_link.strip():
+        return next_link.strip()
     return None
 
 
@@ -2656,10 +2866,17 @@ def _extract_next_link_from_headers(headers: Any) -> str | None:
     if not link_header:
         return None
 
-    for match in re.finditer(r"<([^>]+)>\s*;\s*rel=\"([^\"]+)\"", link_header):
-        link_url, relation = match.groups()
-        if relation.casefold() == "next":
-            return link_url
+    for link_part in link_header.split(","):
+        relation_match = re.search(
+            r'rel\s*=\s*"?([^";,\s]+)"?',
+            link_part,
+            flags=re.IGNORECASE,
+        )
+        if not relation_match or relation_match.group(1).casefold() != "next":
+            continue
+        url_match = re.search(r"<([^>]+)>", link_part)
+        if url_match:
+            return url_match.group(1)
 
     return None
 
@@ -2668,9 +2885,11 @@ def _extract_cursor_from_url(url: str) -> str | None:
     """Extract a cursor query parameter from a URL when present."""
 
     parsed_url = urlparse(url)
-    cursor_values = parse_qs(parsed_url.query).get("cursor", [])
-    if cursor_values and cursor_values[0]:
-        return cursor_values[0]
+    query_values = parse_qs(parsed_url.query)
+    for key, cursor_values in query_values.items():
+        if key.casefold() in {"cursor", "page[cursor]", "page_cursor"}:
+            if cursor_values and cursor_values[0]:
+                return cursor_values[0]
 
     return None
 
@@ -3124,30 +3343,12 @@ def _normalize_ioc_stream_date(value: str | None, field_name: str) -> str | None
     return normalized_value
 
 
-def _build_ioc_stream_date_filtering_metadata(
-    start_date: str | None,
-    end_date: str | None,
-) -> dict[str, Any]:
-    return {
-        "start_date": start_date,
-        "end_date": end_date,
-        "api_filter_applied": False,
-        "local_post_filtering_applied": False,
-        "note": (
-            "Selected dates are shown for reporting context only; local post-filtering "
-            "not yet implemented."
-            if start_date or end_date
-            else ""
-        ),
-    }
-
-
 def _filter_mock_ioc_stream_payload(
     payload: dict[str, Any],
-    limit: int,
     entity_type: str,
     origin: str,
-) -> dict[str, Any]:
+    pages_to_fetch: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     items = []
     for item in _extract_api_items(payload):
         normalized_item = normalize_ioc_stream_item(item)
@@ -3157,7 +3358,89 @@ def _filter_mock_ioc_stream_payload(
             continue
         items.append(item)
 
-    return {"data": items[:limit], "links": payload.get("links", {})}
+    collection_metadata = _build_ioc_stream_collection_metadata(
+        items=items,
+        pages_fetched=1,
+        requested_pages=pages_to_fetch,
+        page_size=IOC_STREAM_API_PAGE_LIMIT,
+        stopped_reason="no_more_pages",
+    )
+    return {"data": items, "links": payload.get("links", {})}, collection_metadata
+
+
+def _extract_ioc_item_datetime(item: dict[str, Any]) -> datetime | None:
+    attributes = item.get("attributes", {})
+    normalized_attributes = attributes if isinstance(attributes, dict) else {}
+    fields = _merge_item_with_attributes(item, normalized_attributes)
+    value = _first_present(
+        fields,
+        (
+            "matched_date",
+            "notification_date",
+            "created_at",
+            "creation_date",
+            "date",
+            "last_modification_date",
+        ),
+    )
+    return _parse_ioc_stream_datetime(value)
+
+
+def _parse_ioc_stream_datetime(value: Any) -> datetime | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+        if timestamp > 1_000_000_000_000:
+            timestamp = timestamp / 1000
+        try:
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return _parse_ioc_stream_datetime(float(text))
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        text = f"{text}T00:00:00+00:00"
+    elif text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _build_ioc_stream_collection_metadata(
+    items: list[dict[str, Any]],
+    pages_fetched: int,
+    requested_pages: int,
+    page_size: int,
+    stopped_reason: str,
+) -> dict[str, Any]:
+    timestamps = [
+        item_datetime
+        for item_datetime in (_extract_ioc_item_datetime(item) for item in items)
+        if item_datetime is not None
+    ]
+    earliest_timestamp = min(timestamps).isoformat() if timestamps else None
+    latest_timestamp = max(timestamps).isoformat() if timestamps else None
+    return {
+        "total_collected": len(items),
+        "raw_ioc_count": len(items),
+        "total_enriched": 0,
+        "requested_pages": requested_pages,
+        "pages_fetched": pages_fetched,
+        "page_size": page_size,
+        "earliest_timestamp": earliest_timestamp,
+        "latest_timestamp": latest_timestamp,
+        "stopped_reason": stopped_reason,
+    }
 
 
 def _normalize_ioc_entity_type(value: Any) -> str:
@@ -3371,12 +3654,14 @@ def _fetch_ioc_enrichment(
     attributes = _extract_ioc_enrichment_attributes(endpoint_result.get("raw_json"))
     stats = attributes.get("last_analysis_stats")
     normalized_stats = stats if isinstance(stats, dict) else {}
+    reputation = _coerce_ioc_number(attributes.get("reputation"))
     return {
         "status": "success",
         "http_status": http_status,
         "malicious": _safe_int(normalized_stats.get("malicious")),
         "suspicious": _safe_int(normalized_stats.get("suspicious")),
-        "reputation": _coerce_ioc_number(attributes.get("reputation")),
+        "reputation": reputation,
+        "has_risk_context": bool(normalized_stats) or reputation is not None,
     }
 
 
@@ -3420,6 +3705,7 @@ def _build_mock_ioc_enrichment(indicator: dict[str, Any]) -> dict[str, Any]:
         "malicious": malicious,
         "suspicious": suspicious,
         "reputation": reputation,
+        "has_risk_context": severity != "Unknown" or reputation is not None,
     }
 
 
@@ -3522,6 +3808,250 @@ def _counter_to_chart_rows(
             ),
         )
     ]
+
+
+def _percentage(part: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round((part / total) * 100, 1)
+
+
+def _normalized_ioc_type_bucket(value: Any) -> str:
+    normalized_type = _normalize_ioc_entity_type(value)
+    return (
+        normalized_type
+        if normalized_type in {"domain", "url", "file", "ip_address"}
+        else "others"
+    )
+
+
+def _build_ioc_type_risk_rows(
+    enriched_indicators: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for indicator in enriched_indicators:
+        entity_type = _normalized_ioc_type_bucket(indicator.get("entity_type"))
+        grouped.setdefault(entity_type, []).append(indicator)
+
+    rows: list[dict[str, Any]] = []
+    for entity_type, items in grouped.items():
+        scores = [
+            score
+            for score in (_coerce_ioc_number(item.get("gti_score")) for item in items)
+            if score is not None
+        ]
+        malicious_count = sum(
+            1 for item in items if _safe_int(item.get("malicious")) > 0
+        )
+        suspicious_count = sum(
+            1 for item in items if _safe_int(item.get("suspicious")) > 0
+        )
+        average_score = (
+            round(sum(float(score) for score in scores) / len(scores), 1)
+            if scores
+            else None
+        )
+        rows.append(
+            {
+                "ioc_type": entity_type,
+                "total_count": len(items),
+                "average_risk_score": average_score,
+                "malicious_indicator_count": malicious_count,
+                "suspicious_indicator_count": suspicious_count,
+                "malicious_percentage": _percentage(malicious_count, len(items)),
+            }
+        )
+
+    return sorted(
+        rows,
+        key=lambda row: (
+            -(row["average_risk_score"] if row["average_risk_score"] is not None else -1),
+            -row["malicious_percentage"],
+            -row["total_count"],
+            row["ioc_type"],
+        ),
+    )
+
+
+def _build_top_dangerous_ioc_rows(
+    enriched_indicators: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    def sort_key(indicator: dict[str, Any]) -> tuple[Any, ...]:
+        reputation = _coerce_ioc_number(indicator.get("reputation"))
+        return (
+            -_safe_int(indicator.get("malicious")),
+            -_safe_int(indicator.get("suspicious")),
+            reputation is None,
+            reputation if reputation is not None else 0,
+            str(indicator.get("value") or "").casefold(),
+        )
+
+    return [
+        {
+            "indicator": indicator.get("value"),
+            "type": indicator.get("entity_type"),
+            "malicious": _safe_int(indicator.get("malicious")),
+            "suspicious": _safe_int(indicator.get("suspicious")),
+            "reputation": _coerce_ioc_number(indicator.get("reputation")),
+            "recommended_action": indicator.get("recommended_action"),
+        }
+        for indicator in sorted(enriched_indicators, key=sort_key)[:10]
+    ]
+
+
+def _build_distribution_rows(
+    counts: dict[str, int],
+    total: int,
+    preferred_order: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "label": label,
+            "count": counts.get(label, 0),
+            "value": counts.get(label, 0),
+            "percentage": _percentage(counts.get(label, 0), total),
+        }
+        for label in preferred_order
+    ]
+
+
+def _build_risk_distribution_rows(
+    enriched_indicators: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    counts = {label: 0 for label in ("High", "Medium", "Low", "Unknown")}
+    for indicator in enriched_indicators:
+        risk = str(indicator.get("severity") or "Unknown")
+        counts[risk if risk in counts else "Unknown"] += 1
+    return _build_distribution_rows(
+        counts,
+        len(enriched_indicators),
+        ("High", "Medium", "Low", "Unknown"),
+    )
+
+
+def _build_ioc_type_distribution_rows(
+    enriched_indicators: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    counts = {label: 0 for label in ("domain", "url", "file", "ip_address", "others")}
+    for indicator in enriched_indicators:
+        counts[_normalized_ioc_type_bucket(indicator.get("entity_type"))] += 1
+    return _build_distribution_rows(
+        counts,
+        len(enriched_indicators),
+        ("domain", "url", "file", "ip_address", "others"),
+    )
+
+
+def _recommended_action_bucket(action: Any) -> str:
+    normalized_action = str(action or "").casefold()
+    if "escalate" in normalized_action:
+        return "Escalate"
+    if "block" in normalized_action:
+        return "Block"
+    if "investigate" in normalized_action:
+        return "Investigate"
+    if "manual" in normalized_action:
+        return "Manual Review"
+    if "monitor" in normalized_action:
+        return "Monitor"
+    return "Manual Review"
+
+
+def _build_recommended_action_distribution_rows(
+    enriched_indicators: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    labels = ("Block", "Monitor", "Investigate", "Manual Review", "Escalate")
+    counts = {label: 0 for label in labels}
+    for indicator in enriched_indicators:
+        counts[_recommended_action_bucket(indicator.get("recommended_action"))] += 1
+    return _build_distribution_rows(counts, len(enriched_indicators), labels)
+
+
+def _build_ioc_business_insights(
+    enriched_indicators: list[dict[str, Any]],
+) -> list[str]:
+    if not enriched_indicators:
+        return [
+            "No successfully enriched IoCs are available for analyst cross-analysis.",
+            "Risk distribution cannot be computed until enrichment succeeds.",
+            "Manual review should focus on indicators where enrichment failed or returned no risk context.",
+        ]
+
+    type_risk_rows = _build_ioc_type_risk_rows(enriched_indicators)
+    type_distribution = _build_ioc_type_distribution_rows(enriched_indicators)
+    risk_distribution = _build_risk_distribution_rows(enriched_indicators)
+    action_distribution = _build_recommended_action_distribution_rows(enriched_indicators)
+    dangerous_rows = _build_top_dangerous_ioc_rows(enriched_indicators)
+    insights: list[str] = []
+
+    highest_score_row = next(
+        (row for row in type_risk_rows if row["average_risk_score"] is not None),
+        None,
+    )
+    if highest_score_row:
+        insights.append(
+            f"{highest_score_row['ioc_type']} indicators carry the highest average GTI score "
+            f"({highest_score_row['average_risk_score']})."
+        )
+    elif type_risk_rows:
+        highest_malicious_row = sorted(
+            type_risk_rows,
+            key=lambda row: (-row["malicious_percentage"], -row["total_count"], row["ioc_type"]),
+        )[0]
+        insights.append(
+            f"{highest_malicious_row['ioc_type']} indicators have the highest malicious detection rate "
+            f"({highest_malicious_row['malicious_percentage']}%)."
+        )
+
+    dominant_type = sorted(
+        type_distribution,
+        key=lambda row: (-row["count"], row["label"]),
+    )[0]
+    risk_leader = type_risk_rows[0] if type_risk_rows else None
+    if risk_leader and dominant_type["label"] != risk_leader["ioc_type"]:
+        insights.append(
+            f"{dominant_type['label']} indicators dominate total enriched volume, "
+            f"but {risk_leader['ioc_type']} indicators carry stronger risk signals."
+        )
+    else:
+        insights.append(
+            f"{dominant_type['label']} indicators dominate the enriched IoC volume."
+        )
+
+    unknown_row = next(
+        row for row in risk_distribution if row["label"] == "Unknown"
+    )
+    if unknown_row["count"] > 0:
+        insights.append(
+            "Manual review should focus on unknown indicators where enrichment returned no usable risk context."
+        )
+    else:
+        insights.append(
+            "All successfully enriched indicators have enough context for an initial risk bucket."
+        )
+
+    top_dangerous = dangerous_rows[0] if dangerous_rows else None
+    if top_dangerous and top_dangerous["malicious"] > 0:
+        insights.append(
+            f"The most dangerous enriched indicator is {top_dangerous['indicator']} "
+            f"with {top_dangerous['malicious']} malicious detection(s)."
+        )
+    else:
+        insights.append(
+            "No successfully enriched indicator has malicious vendor detections in this result set."
+        )
+
+    leading_action = sorted(
+        action_distribution,
+        key=lambda row: (-row["count"], row["label"]),
+    )[0]
+    if leading_action["count"] > 0:
+        insights.append(
+            f"The most common recommended action is {leading_action['label']} "
+            f"for {leading_action['count']} enriched indicator(s)."
+        )
+
+    return insights[:5]
 
 
 def get_top_industries(

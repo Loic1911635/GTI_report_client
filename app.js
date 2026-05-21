@@ -48,13 +48,9 @@ const dtmDashboardButton = document.getElementById("dtm-dashboard-button");
 const iocStreamFields = document.getElementById("ioc-stream-fields");
 const iocStreamActions = document.getElementById("ioc-stream-actions");
 const iocStreamButton = document.getElementById("ioc-stream-button");
-const iocStreamLimitField = document.getElementById("ioc_stream_limit");
-const iocStreamStartDateField = document.getElementById("ioc_stream_start_date");
-const iocStreamEndDateField = document.getElementById("ioc_stream_end_date");
+const iocStreamPagesToFetchField = document.getElementById("ioc_stream_pages_to_fetch");
 const iocStreamEntityTypeField = document.getElementById("ioc_stream_entity_type");
 const iocStreamOriginField = document.getElementById("ioc_stream_origin");
-const iocStreamEnrichField = document.getElementById("ioc_stream_enrich");
-const iocStreamDescriptorsOnlyField = document.getElementById("ioc_stream_descriptors_only");
 const iocStreamDocxButton = document.getElementById("ioc-stream-docx-button");
 const dtmDashboardSinceField = document.getElementById("dtm_dashboard_since");
 const dtmDashboardUntilField = document.getElementById("dtm_dashboard_until");
@@ -92,7 +88,7 @@ const IOC_ENRICHMENT = "IoC Enrichment";
 const INDUSTRY_SNAPSHOT_EXPLORER = "Industry Snapshot Explorer";
 const COMPANY_EXPOSURE_DTM = "Company Exposure / DTM";
 const DTM_DASHBOARD = "DTM Monitor & Alert Dashboard";
-const IOC_STREAM_REPORT = "IoC Stream Report";
+const IOC_STREAM_REPORT = "Recent IoC Stream Sample Report";
 const GTI_INTELLIGENCE_SEARCH = "GTI Intelligence Search";
 const TOP_TARGETS_RANKING = "Top Targets Ranking";
 const TOP_TARGETS_SEARCH_PAGE_SIZE = 40;
@@ -162,10 +158,10 @@ const MODE_META = {
         emptyText: "Choose a date range and page limit, then click Run Dashboard.",
     },
     [IOC_STREAM_REPORT]: {
-        label: "IoC Stream Report",
-        description: "Builds a client-friendly report from recent GTI IoC Stream notifications with metrics, charts, explanations, and recommended actions.",
-        emptyTitle: "Ready to build an IoC Stream report",
-        emptyText: "Choose filters, then click Generate IoC Stream Report.",
+        label: "Recent IoC Stream Sample Report",
+        description: "Builds a recent-page sample from GTI IoC Stream notifications with enrichment, risk analytics, charts, and recommended actions.",
+        emptyTitle: "Ready to build a Recent IoC Stream Sample report",
+        emptyText: "Choose how many recent pages to fetch, then click Generate Recent IoC Stream Sample Report.",
     },
     [GTI_INTELLIGENCE_SEARCH]: {
         label: "GTI Intelligence Search",
@@ -380,7 +376,7 @@ function setIocStreamLoadingState(isLoading) {
     if (iocStreamDocxButton) {
         iocStreamDocxButton.disabled = isLoading || !lastIocStreamResponse;
     }
-    iocStreamButton.textContent = isLoading ? "Generating IoC Stream Report..." : "Generate IoC Stream Report";
+    iocStreamButton.textContent = isLoading ? "Generating Recent IoC Stream Sample Report..." : "Generate Recent IoC Stream Sample Report";
     updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
 }
 
@@ -2383,15 +2379,11 @@ function renderDtmDashboard(responseData) {
 
 function buildIocStreamParams() {
     const params = new URLSearchParams();
-    params.set("limit", String(Number(iocStreamLimitField?.value || 40)));
+    params.set("pages_to_fetch", String(Number(iocStreamPagesToFetchField?.value || 5)));
     params.set("entity_type", iocStreamEntityTypeField?.value || "all");
     params.set("origin", iocStreamOriginField?.value || "all");
-    params.set("enrich", iocStreamEnrichField?.checked ? "true" : "false");
-    params.set("descriptors_only", iocStreamDescriptorsOnlyField?.checked ? "true" : "false");
-    const startDate = iocStreamStartDateField?.value || "";
-    const endDate = iocStreamEndDateField?.value || "";
-    if (startDate) params.set("start_date", startDate);
-    if (endDate) params.set("end_date", endDate);
+    params.set("enrich", "true");
+    params.set("descriptors_only", "false");
     return params;
 }
 
@@ -2512,6 +2504,93 @@ function SummaryCards(summary) {
     `;
 }
 
+function formatTimestampForReport(value) {
+    if (!value) {
+        return "n/a";
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return String(value);
+    }
+    return date.toLocaleString();
+}
+
+function RecentExposureCollectionSummary(responseData) {
+    const collection = responseData.collection || responseData.technical_details?.collection || {};
+    const warnings = Array.isArray(responseData.technical_details?.warnings)
+        ? responseData.technical_details.warnings
+        : [];
+    const diagnostics = responseData.technical_details?.diagnostics || {};
+    const pageDiagnostics = Array.isArray(diagnostics.page_diagnostics)
+        ? diagnostics.page_diagnostics
+        : (Array.isArray(collection.page_diagnostics) ? collection.page_diagnostics : []);
+    const stoppedReason = String(collection.stopped_reason || "unknown").replaceAll("_", " ");
+    const earliestTimestamp = collection.earliest_timestamp || responseData.summary?.earliest_timestamp;
+    const latestTimestamp = collection.latest_timestamp || responseData.summary?.latest_timestamp;
+    const cards = [
+        ["Requested Pages", collection.requested_pages ?? responseData.technical_details?.request_params?.pages_to_fetch ?? "n/a", "input"],
+        ["Pages Fetched", collection.pages_fetched ?? responseData.summary?.pages_fetched ?? 0, "GTI pages"],
+        ["Raw IoCs Returned", collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0, "before dedupe"],
+        ["Unique IoCs", collection.unique_ioc_count ?? responseData.summary?.unique_ioc_count ?? 0, "deduped"],
+        ["Duplicates Removed", collection.duplicates_removed ?? responseData.summary?.duplicates_removed ?? 0, "duplicates"],
+        ["Enriched", collection.total_enriched ?? responseData.summary?.total_enriched ?? 0, "IoCs"],
+        ["Stopped", stoppedReason, "reason"],
+        ["Earliest Returned", formatTimestampForReport(earliestTimestamp), "timestamp"],
+        ["Latest Returned", formatTimestampForReport(latestTimestamp), "timestamp"],
+    ];
+    const diagnosticsTable = pageDiagnostics.length ? `
+        <details class="diagnostics-block">
+            <summary>IoC Stream pagination diagnostics</summary>
+            <div class="table-scroll">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Page</th>
+                            <th>Raw items</th>
+                            <th>Next cursor</th>
+                            <th>Next link</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${pageDiagnostics.map((page) => `
+                            <tr>
+                                <td>${escapeHtml(String(page.page_number ?? "n/a"))}</td>
+                                <td>${escapeHtml(String(page.raw_page_item_count ?? 0))}</td>
+                                <td>${escapeHtml(String(Boolean(page.next_cursor_found)))}</td>
+                                <td>${escapeHtml(String(Boolean(page.next_link_found)))}</td>
+                            </tr>
+                        `).join("")}
+                    </tbody>
+                </table>
+            </div>
+            <p class="compact-note">Stopped reason: ${escapeHtml(String(diagnostics.stopped_reason || collection.stopped_reason || "unknown"))}. Unique IoCs: ${escapeHtml(String(diagnostics.unique_ioc_count ?? collection.unique_ioc_count ?? 0))}. Duplicates removed: ${escapeHtml(String(diagnostics.duplicates_removed ?? collection.duplicates_removed ?? 0))}.</p>
+        </details>
+    ` : "";
+    return `
+        <section class="report-section-card">
+            <h2>Recent Stream Sample</h2>
+            <p><strong>Requested pages:</strong> ${escapeHtml(String(collection.requested_pages ?? responseData.technical_details?.request_params?.pages_to_fetch ?? "n/a"))}</p>
+            <p><strong>Pages fetched:</strong> ${escapeHtml(String(collection.pages_fetched ?? responseData.summary?.pages_fetched ?? 0))}</p>
+            <p><strong>Raw IoCs returned:</strong> ${escapeHtml(String(collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0))}</p>
+            <p><strong>Unique IoCs after deduplication:</strong> ${escapeHtml(String(collection.unique_ioc_count ?? responseData.summary?.unique_ioc_count ?? 0))}</p>
+            <p><strong>Earliest returned timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(earliestTimestamp)))}</p>
+            <p><strong>Latest returned timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(latestTimestamp)))}</p>
+            <div class="kpi-grid ioc-summary-grid">
+                ${cards.map(([label, value, hint]) => `
+                    <div class="kpi-card">
+                        <span>${escapeHtml(String(label))}</span>
+                        <strong>${escapeHtml(String(value))}</strong>
+                        <small>${escapeHtml(String(hint))}</small>
+                    </div>
+                `).join("")}
+            </div>
+            <p class="compact-note">IoC Stream is chronological. This report summarizes the recent pages returned by the API, not a guaranteed complete time window.</p>
+            ${warnings.length ? `<div class="diagnostic-warning compact">${warnings.map((warning) => `<p>${escapeHtml(String(warning))}</p>`).join("")}</div>` : ""}
+            ${diagnosticsTable}
+        </section>
+    `;
+}
+
 function IocStreamCharts(charts) {
     const chartData = charts || {};
     return `
@@ -2544,6 +2623,8 @@ function IocStreamEnrichmentStatus(technicalDetails) {
         ["Attempted", enrichment.attempted ?? 0],
         ["Succeeded", enrichment.succeeded ?? 0],
         ["Errors", enrichment.errors ?? 0],
+        ["Requested", enrichment.requested_limit ?? 0],
+        ["Actual Scope", enrichment.actual_limit ?? 0],
     ];
     return `
         <section class="report-section-card">
@@ -2556,22 +2637,7 @@ function IocStreamEnrichmentStatus(technicalDetails) {
                     </div>
                 `).join("")}
             </div>
-            <p class="compact-note">Risk is Unknown unless GTI Stream provides a score/verdict or enrichment is enabled. Unknown does not mean safe.</p>
-        </section>
-    `;
-}
-
-function IocStreamDateFilterNotice(technicalDetails) {
-    const dateFiltering = technicalDetails?.date_filtering || {};
-    if (!dateFiltering.start_date && !dateFiltering.end_date) {
-        return "";
-    }
-    return `
-        <section class="report-section-card">
-            <h2>Date Filters</h2>
-            <p><strong>Selected start:</strong> ${escapeHtml(String(dateFiltering.start_date || "none"))}</p>
-            <p><strong>Selected end:</strong> ${escapeHtml(String(dateFiltering.end_date || "none"))}</p>
-            <p class="compact-note">${escapeHtml(String(dateFiltering.note || "Local post-filtering not yet implemented."))}</p>
+            <p class="compact-note">Risk scoring requires enrichment. This may generate one API lookup per IoC. Unknown means enrichment failed or GTI returned no risk context.</p>
         </section>
     `;
 }
@@ -2633,6 +2699,215 @@ function renderIocEnrichmentCell(item) {
     `;
 }
 
+function formatAnalyticsPercent(value) {
+    const number = Number(value || 0);
+    return `${number.toFixed(number % 1 === 0 ? 0 : 1)}%`;
+}
+
+function IocStreamAnalystCards(analytics) {
+    const riskRows = Array.isArray(analytics.risk_distribution) ? analytics.risk_distribution : [];
+    const actionRows = Array.isArray(analytics.recommended_action_distribution)
+        ? analytics.recommended_action_distribution
+        : [];
+    const dangerousRows = Array.isArray(analytics.top_dangerous_indicators)
+        ? analytics.top_dangerous_indicators
+        : [];
+    const highRisk = riskRows.find((row) => row.label === "High")?.count || 0;
+    const manualReview = actionRows.find((row) => row.label === "Manual Review")?.count || 0;
+    const topDangerous = dangerousRows[0];
+    const cards = [
+        ["Enriched IoCs", analytics.enriched_indicator_count || 0, "scored"],
+        ["High Risk", highRisk, "enriched"],
+        ["Manual Review", manualReview, "enriched"],
+        [
+            "Top Malicious",
+            topDangerous ? topDangerous.malicious || 0 : 0,
+            topDangerous ? String(topDangerous.type || "indicator") : "detections",
+        ],
+    ];
+    return `
+        <div class="kpi-grid ioc-summary-grid">
+            ${cards.map(([label, value, hint]) => `
+                <div class="kpi-card">
+                    <span>${escapeHtml(String(label))}</span>
+                    <strong>${escapeHtml(String(value))}</strong>
+                    <small>${escapeHtml(String(hint))}</small>
+                </div>
+            `).join("")}
+        </div>
+    `;
+}
+
+function IocStreamAnalystCharts(analytics) {
+    const riskRows = Array.isArray(analytics.risk_distribution) ? analytics.risk_distribution : [];
+    const typeRows = Array.isArray(analytics.ioc_type_distribution) ? analytics.ioc_type_distribution : [];
+    const actionRows = Array.isArray(analytics.recommended_action_distribution)
+        ? analytics.recommended_action_distribution
+        : [];
+    const typeRiskRows = Array.isArray(analytics.highest_risk_by_ioc_type)
+        ? analytics.highest_risk_by_ioc_type
+            .filter((row) => row.average_risk_score !== null && row.average_risk_score !== undefined)
+            .map((row) => ({
+                label: row.ioc_type,
+                value: Number(row.average_risk_score || 0),
+            }))
+        : [];
+    return `
+        <div class="stats-charts-grid ioc-chart-grid">
+            <section class="stats-chart-panel report-section-card">
+                <h2 class="stats-chart-title">Enriched Risk Distribution</h2>
+                ${renderIocStreamBarChart(riskRows)}
+            </section>
+            <section class="stats-chart-panel report-section-card">
+                <h2 class="stats-chart-title">Enriched IoC Type Distribution</h2>
+                ${renderIocStreamDonutChart(typeRows, "Enriched IoC type distribution")}
+            </section>
+            <section class="stats-chart-panel report-section-card">
+                <h2 class="stats-chart-title">Recommended Action Distribution</h2>
+                ${renderIocStreamDonutChart(actionRows, "Recommended action distribution")}
+            </section>
+            <section class="stats-chart-panel report-section-card">
+                <h2 class="stats-chart-title">Average GTI Score by Type</h2>
+                ${renderIocStreamBarChart(typeRiskRows)}
+            </section>
+        </div>
+    `;
+}
+
+function HighestRiskByTypeTable(rows) {
+    const data = Array.isArray(rows) ? rows : [];
+    if (!data.length) {
+        return `<p><em>No successfully enriched IoCs are available for this analysis.</em></p>`;
+    }
+    return `
+        <div class="table-scroll">
+            <table class="ranking-table monitor-table">
+                <thead>
+                    <tr>
+                        <th>IoC Type</th>
+                        <th>Total</th>
+                        <th>Avg GTI score</th>
+                        <th>Malicious IoCs</th>
+                        <th>Suspicious IoCs</th>
+                        <th>Malicious %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${data.map((row) => `
+                        <tr class="ranking-row">
+                            <td class="name-cell"><strong>${escapeHtml(String(row.ioc_type || "others"))}</strong></td>
+                            <td class="count-cell">${escapeHtml(String(row.total_count ?? 0))}</td>
+                            <td class="count-cell">${escapeHtml(row.average_risk_score === null || row.average_risk_score === undefined ? "n/a" : String(row.average_risk_score))}</td>
+                            <td class="count-cell">${escapeHtml(String(row.malicious_indicator_count ?? 0))}</td>
+                            <td class="count-cell">${escapeHtml(String(row.suspicious_indicator_count ?? 0))}</td>
+                            <td class="count-cell">${escapeHtml(formatAnalyticsPercent(row.malicious_percentage))}</td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function DangerousIndicatorsTable(rows) {
+    const data = Array.isArray(rows) ? rows : [];
+    if (!data.length) {
+        return `<p><em>No successfully enriched IoCs are available for dangerous-indicator ranking.</em></p>`;
+    }
+    return `
+        <div class="table-scroll">
+            <table class="ranking-table monitor-table">
+                <thead>
+                    <tr>
+                        <th>Indicator</th>
+                        <th>Type</th>
+                        <th>Malicious</th>
+                        <th>Suspicious</th>
+                        <th>Reputation</th>
+                        <th>Recommended action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${data.map((row) => `
+                        <tr class="ranking-row">
+                            <td class="name-cell"><strong>${escapeHtml(String(row.indicator || "Unknown"))}</strong></td>
+                            <td class="count-cell">${escapeHtml(String(row.type || "Unknown"))}</td>
+                            <td class="count-cell">${escapeHtml(String(row.malicious ?? 0))}</td>
+                            <td class="count-cell">${escapeHtml(String(row.suspicious ?? 0))}</td>
+                            <td class="count-cell">${escapeHtml(row.reputation === null || row.reputation === undefined ? "n/a" : String(row.reputation))}</td>
+                            <td class="count-cell">${escapeHtml(String(row.recommended_action || "Manual review"))}</td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function DistributionTable(rows) {
+    const data = Array.isArray(rows) ? rows : [];
+    if (!data.length) {
+        return `<p><em>No distribution data.</em></p>`;
+    }
+    return `
+        <div class="table-scroll">
+            <table class="ranking-table monitor-table compact-table">
+                <thead>
+                    <tr>
+                        <th>Bucket</th>
+                        <th>Count</th>
+                        <th>Percent</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${data.map((row) => `
+                        <tr class="ranking-row">
+                            <td class="name-cell">${escapeHtml(String(row.label || "Unknown"))}</td>
+                            <td class="count-cell">${escapeHtml(String(row.count ?? row.value ?? 0))}</td>
+                            <td class="count-cell">${escapeHtml(formatAnalyticsPercent(row.percentage))}</td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function IocStreamAnalystAnalysis(analytics) {
+    const analystData = analytics || {};
+    const insights = Array.isArray(analystData.business_insights)
+        ? analystData.business_insights
+        : [];
+    return `
+        <section class="analyst-cross-analysis">
+            <h2>Analyst Cross-Analysis</h2>
+            <p class="compact-note">Computed only from successfully enriched indicators. Missing fields are left as n/a.</p>
+            ${IocStreamAnalystCards(analystData)}
+            ${IocStreamAnalystCharts(analystData)}
+            <h3>Business Insights</h3>
+            <ul>${insights.map((sentence) => `<li>${escapeHtml(String(sentence))}</li>`).join("")}</ul>
+            <h3>Highest Risk by IoC Type</h3>
+            ${HighestRiskByTypeTable(analystData.highest_risk_by_ioc_type)}
+            <h3>Top 10 Most Dangerous Indicators</h3>
+            ${DangerousIndicatorsTable(analystData.top_dangerous_indicators)}
+            <div class="stats-charts-grid ioc-chart-grid">
+                <section class="stats-chart-panel report-section-card">
+                    <h3>Risk Distribution</h3>
+                    ${DistributionTable(analystData.risk_distribution)}
+                </section>
+                <section class="stats-chart-panel report-section-card">
+                    <h3>IoC Type Distribution</h3>
+                    ${DistributionTable(analystData.ioc_type_distribution)}
+                </section>
+                <section class="stats-chart-panel report-section-card">
+                    <h3>Recommended Action Distribution</h3>
+                    ${DistributionTable(analystData.recommended_action_distribution)}
+                </section>
+            </div>
+        </section>
+    `;
+}
+
 function DefinitionsPanel(definitions) {
     const rows = Array.isArray(definitions) ? definitions : [];
     return `
@@ -2661,17 +2936,18 @@ function IocStreamReportPage(responseData) {
     const enrichment = responseData.technical_details?.enrichment || {};
     const enrichmentNote = enrichment.enabled
         ? `Enrichment enabled: ${Number(enrichment.succeeded || 0)} / ${Number(enrichment.attempted || 0)} indicator lookup(s) succeeded.`
-        : "Enrichment disabled. Enable it to enrich the top 10 returned indicators with read-only VT/GTI lookups.";
+        : "Enrichment disabled. Risk scoring requires enrichment.";
 
     return `
         <div class="report-document ioc-stream-document">
-            <h1>IoC Stream Report</h1>
+            <h1>Recent IoC Stream Sample Report</h1>
             <p class="compact-note">Generated from recent GTI IoC Stream notifications. This module is read-only. ${escapeHtml(enrichmentNote)}</p>
-            <p class="diagnostic-warning compact">Risk is Unknown unless GTI Stream provides a score/verdict or enrichment is enabled. Unknown indicators are not treated as safe.</p>
+            <p class="diagnostic-warning compact">Risk scoring requires enrichment. This may generate one API lookup per IoC. Unknown indicators are not treated as safe.</p>
             ${noDataMessage}
+            ${RecentExposureCollectionSummary(responseData)}
             ${SummaryCards(summary)}
             ${IocStreamEnrichmentStatus(responseData.technical_details || {})}
-            ${IocStreamDateFilterNotice(responseData.technical_details || {})}
+            ${IocStreamAnalystAnalysis(responseData.analytics || {})}
             ${IocStreamCharts(responseData.charts || {})}
             <section class="report-section-card">
                 <h2>Business Interpretation</h2>
@@ -2683,8 +2959,8 @@ function IocStreamReportPage(responseData) {
             </section>
             ${DefinitionsPanel(responseData.definitions)}
             <details class="inline-raw-json">
-                <summary>Technical details</summary>
-                <pre>${escapeHtml(JSON.stringify(responseData.technical_details || {}, null, 2))}</pre>
+                <summary>Raw JSON</summary>
+                <pre>${escapeHtml(JSON.stringify(responseData || {}, null, 2))}</pre>
             </details>
         </div>
     `;
@@ -2696,16 +2972,17 @@ function renderIocStreamReport(responseData) {
     iocStreamOutput.innerHTML = html;
     reportOutput.classList.remove("empty-state");
     reportOutput.innerHTML = `
-        <h1>IoC Stream Report</h1>
+        <h1>Recent IoC Stream Sample Report</h1>
+        ${RecentExposureCollectionSummary(responseData)}
         ${SummaryCards(responseData.summary || {})}
-        <p>${escapeHtml(String(responseData.message || "IoC Stream report generated."))}</p>
-        <button type="button" class="link-button" data-switch-tab="ioc-stream">Open IoC Stream Report tab</button>
+        <p>${escapeHtml(String(responseData.message || "Recent IoC Stream Sample report generated."))}</p>
+        <button type="button" class="link-button" data-switch-tab="ioc-stream">Open Recent IoC Stream Sample tab</button>
     `;
 }
 
 async function exportIocStreamDocx() {
     if (!lastIocStreamResponse) {
-        showMessage("Generate an IoC Stream report before exporting a Word report.", "error");
+        showMessage("Generate a Recent IoC Stream Sample report before exporting a Word report.", "error");
         return;
     }
 
@@ -2771,9 +3048,12 @@ async function runIocStreamReport() {
         const response = await fetch(`/api/ioc-stream/report?${buildIocStreamParams()}`, {
             headers: { "x-api-key": apiKey },
         });
-        const responseData = await response.json();
+        const responseData = await response.json().catch(() => ({}));
         if (!response.ok) {
-            throw new Error(responseData.detail || "The backend returned an error.");
+            const detail = Array.isArray(responseData.detail)
+                ? responseData.detail.map((item) => item.msg || JSON.stringify(item)).join("; ")
+                : responseData.detail;
+            throw new Error(detail ? `API error: ${detail}` : "API error: The backend returned an error.");
         }
 
         lastIocStreamResponse = responseData;
@@ -2784,21 +3064,21 @@ async function runIocStreamReport() {
 
         updateStatus("Success", "success");
         showMessage(
-            responseData.message || `IoC Stream report generated with ${formatInteger(responseData.summary?.total_iocs)} indicator(s).`,
+            responseData.message || `Recent IoC Stream Sample report generated with ${formatInteger(responseData.summary?.total_iocs)} indicator(s).`,
             "success",
         );
     } catch (error) {
         lastIocStreamResponse = null;
         iocStreamOutput.classList.add("empty-state");
         iocStreamOutput.innerHTML = `
-            <h3>IoC Stream report failed</h3>
+            <h3>Recent IoC Stream Sample report failed</h3>
             <p>${escapeHtml(error.message || "Unknown error.")}</p>
         `;
         reportOutput.classList.add("empty-state");
         reportOutput.innerHTML = iocStreamOutput.innerHTML;
         rawJsonOutput.textContent = "No valid JSON payload was returned.";
         updateStatus("Error", "error");
-        showMessage(error.message || "IoC Stream report failed.", "error");
+        showMessage(error.message || "Recent IoC Stream Sample report failed.", "error");
     } finally {
         setIocStreamLoadingState(false);
 

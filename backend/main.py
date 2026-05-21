@@ -217,9 +217,9 @@ class TopRankingDocxExportRequest(BaseModel):
 
 
 class IocStreamDocxExportRequest(BaseModel):
-    """Input payload for DOCX export from an existing IoC Stream report."""
+    """Input payload for DOCX export from an existing Recent IoC Stream Sample report."""
 
-    ioc_stream_report: dict[str, Any] = Field(..., description="Already computed IoC Stream report.")
+    ioc_stream_report: dict[str, Any] = Field(..., description="Already computed Recent IoC Stream Sample report.")
 
 
 class IndustrySnapshotExplorerResponse(BaseModel):
@@ -753,7 +753,7 @@ def export_top_ranking_docx(request: TopRankingDocxExportRequest) -> FileRespons
 
 @app.post("/export/ioc-stream-docx", include_in_schema=False)
 def export_ioc_stream_docx(request: IocStreamDocxExportRequest) -> FileResponse:
-    """Generate a DOCX report from an already computed IoC Stream report."""
+    """Generate a DOCX report from an already computed Recent IoC Stream Sample report."""
 
     try:
         report_data = dict(request.ioc_stream_report or {})
@@ -775,24 +775,24 @@ def export_ioc_stream_docx(request: IocStreamDocxExportRequest) -> FileResponse:
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"IoC Stream DOCX export failed: {exc}",
+            detail=f"Recent IoC Stream Sample DOCX export failed: {exc}",
         ) from exc
 
 
 @app.get("/api/ioc-stream/report")
 def api_ioc_stream_report(
-    limit: int = Query(default=40, ge=1, le=100),
     entity_type: str = Query(default="all"),
     origin: str = Query(default="all"),
-    enrich: bool = Query(default=False),
+    enrich: bool = Query(default=True),
+    enrichment_limit: int | None = Query(default=None, ge=0, le=500),
     descriptors_only: bool = Query(default=False),
     cursor: str | None = Query(default=None),
     order: str = Query(default="date"),
-    start_date: str | None = Query(default=None),
-    end_date: str | None = Query(default=None),
+    pages_to_fetch: int = Query(default=5),
+    max_pages: int | None = Query(default=None),
     x_api_key: str = Header(default=""),
 ) -> dict[str, Any]:
-    """Return a read-only, client-friendly report from GTI IoC Stream."""
+    """Return a read-only Recent IoC Stream Sample report from GTI IoC Stream."""
 
     api_key = (x_api_key or os.environ.get("GTI_API_KEY") or "").strip()
     if not api_key:
@@ -804,14 +804,13 @@ def api_ioc_stream_report(
     try:
         stream_result = fetch_ioc_stream(
             api_key=api_key,
-            limit=limit,
             entity_type=entity_type,
             origin=origin,
-            descriptors_only=descriptors_only,
+            descriptors_only=False,
             cursor=cursor,
             order=order,
-            start_date=start_date,
-            end_date=end_date,
+            pages_to_fetch=pages_to_fetch,
+            max_pages=max_pages,
         )
         status_code = int(stream_result.get("status_code", 0))
         if status_code in (401, 403):
@@ -838,13 +837,14 @@ def api_ioc_stream_report(
             stream_result,
             api_key=api_key,
             enrich=enrich,
+            enrichment_limit=enrichment_limit,
         )
         return {
             "status": "success",
             "message": (
-                "No IoC Stream notifications were returned for the selected filters."
+                "No recent IoC Stream indicators were returned for the requested pages."
                 if report["summary"]["total_iocs"] == 0
-                else "IoC Stream report generated."
+                else "Recent IoC Stream Sample report generated."
             ),
             **report,
         }
@@ -857,7 +857,7 @@ def api_ioc_stream_report(
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"IoC Stream report failed: {exc}",
+            detail=f"Recent IoC Stream Sample report failed: {exc}",
         ) from exc
 
 
