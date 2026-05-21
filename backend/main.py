@@ -6,6 +6,7 @@ import time
 import tempfile
 import base64
 import binascii
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +17,12 @@ from backend.routes.dtm_dashboard import router as dtm_dashboard_router
 
 from backend.gti_client import (
     GTIClientError,
+    build_ioc_stream_report,
     MAX_TOP_TARGETS_DETAIL_LOOKUPS,
     MockGTIClient,
     aggregate_top_targets,
     explore_industry_snapshots,
+    fetch_ioc_stream,
     get_collection_details,
     get_top_companies,
     get_top_industries,
@@ -29,6 +32,7 @@ from backend.gti_client import (
     lookup_domain,
     test_single_mitre_tree,
 )
+from backend.ioc_stream_docx import generate_ioc_stream_docx
 from backend.report_generator import (
     build_downloadable_filename,
     generate_ioc_enrichment_markdown_report,
@@ -210,6 +214,12 @@ class TopRankingDocxExportRequest(BaseModel):
         default=None,
         description="Original custom template filename.",
     )
+
+
+class IocStreamDocxExportRequest(BaseModel):
+    """Input payload for DOCX export from an existing IoC Stream report."""
+
+    ioc_stream_report: dict[str, Any] = Field(..., description="Already computed IoC Stream report.")
 
 
 class IndustrySnapshotExplorerResponse(BaseModel):
@@ -739,6 +749,127 @@ def export_top_ranking_docx(request: TopRankingDocxExportRequest) -> FileRespons
             status_code=500,
             detail=f"Top ranking DOCX export failed: {exc}",
         ) from exc
+
+
+@app.post("/export/ioc-stream-docx", include_in_schema=False)
+def export_ioc_stream_docx(request: IocStreamDocxExportRequest) -> FileResponse:
+    """Generate a DOCX report from an already computed IoC Stream report."""
+
+    try:
+        report_data = dict(request.ioc_stream_report or {})
+        report_data.pop("api_key", None)
+        report_data.pop("x_api_key", None)
+
+        output_dir = Path(tempfile.gettempdir()) / "gti_report_client"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / "gti-ioc-stream-report.docx"
+        generated_path = generate_ioc_stream_docx(
+            report_data=report_data,
+            output_path=str(output_path),
+        )
+        return FileResponse(
+            generated_path,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            filename=Path(generated_path).name,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"IoC Stream DOCX export failed: {exc}",
+        ) from exc
+
+
+@app.get("/api/ioc-stream/report")
+def api_ioc_stream_report(
+    limit: int = Query(default=40, ge=1, le=100),
+    entity_type: str = Query(default="all"),
+    origin: str = Query(default="all"),
+    enrich: bool = Query(default=False),
+    descriptors_only: bool = Query(default=False),
+    cursor: str | None = Query(default=None),
+    order: str = Query(default="date"),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
+    x_api_key: str = Header(default=""),
+) -> dict[str, Any]:
+    """Return a read-only, client-friendly report from GTI IoC Stream."""
+
+    api_key = (x_api_key or os.environ.get("GTI_API_KEY") or "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="x-api-key header or GTI_API_KEY environment variable is required.",
+        )
+
+    try:
+        stream_result = fetch_ioc_stream(
+            api_key=api_key,
+            limit=limit,
+            entity_type=entity_type,
+            origin=origin,
+            descriptors_only=descriptors_only,
+            cursor=cursor,
+            order=order,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        status_code = int(stream_result.get("status_code", 0))
+        if status_code in (401, 403):
+            raise HTTPException(
+                status_code=status_code,
+                detail=(
+                    "Unable to access IoC Stream. This may require a valid GTI "
+                    "subscription and an API key with access to IoC Stream."
+                ),
+            )
+        if status_code == 429:
+            raise HTTPException(
+                status_code=429,
+                detail="GTI rate limit reached. Try again later or reduce the limit.",
+            )
+        if status_code != 200:
+            detail = _extract_upstream_error_detail(stream_result.get("raw_data"))
+            raise HTTPException(
+                status_code=502,
+                detail=detail or f"GTI IoC Stream request failed with status {status_code}.",
+            )
+
+        report = build_ioc_stream_report(
+            stream_result,
+            api_key=api_key,
+            enrich=enrich,
+        )
+        return {
+            "status": "success",
+            "message": (
+                "No IoC Stream notifications were returned for the selected filters."
+                if report["summary"]["total_iocs"] == 0
+                else "IoC Stream report generated."
+            ),
+            **report,
+        }
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GTIClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"IoC Stream report failed: {exc}",
+        ) from exc
+
+
+def _extract_upstream_error_detail(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error")
+    if isinstance(error, dict):
+        return str(error.get("message") or error.get("code") or "").strip()
+    if error:
+        return str(error).strip()
+    return str(payload.get("message") or payload.get("detail") or "").strip()
 
 
 @app.get("/api/industries")

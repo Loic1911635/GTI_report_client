@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import calendar
 import re
@@ -21,9 +22,17 @@ VIRUSTOTAL_INTELLIGENCE_SEARCH_URL = (
 VIRUSTOTAL_DTM_MONITORS_URL = "https://www.virustotal.com/api/v3/dtm/monitors"
 VIRUSTOTAL_DTM_ALERTS_URL = "https://www.virustotal.com/api/v3/dtm/alerts"
 VIRUSTOTAL_DTM_EVENTS_URL = "https://www.virustotal.com/api/v3/dtm/events"
+VIRUSTOTAL_IOC_STREAM_URL = "https://www.virustotal.com/api/v3/ioc_stream"
+VIRUSTOTAL_IP_ADDRESS_LOOKUP_URL = "https://www.virustotal.com/api/v3/ip_addresses/{}"
+VIRUSTOTAL_URL_LOOKUP_URL = "https://www.virustotal.com/api/v3/urls/{}"
+VIRUSTOTAL_FILE_LOOKUP_URL = "https://www.virustotal.com/api/v3/files/{}"
 DEFAULT_TTP_CANDIDATES = 25
 MAX_TTP_CANDIDATES = 100
 MAX_SAFE_DTM_PAGES = 5
+DEFAULT_IOC_STREAM_LIMIT = 40
+DEFAULT_IOC_STREAM_ENRICHMENT_LIMIT = 10
+IOC_STREAM_API_PAGE_LIMIT = 40
+MAX_IOC_STREAM_LIMIT = 100
 DEFAULT_INTELLIGENCE_SEARCH_LIMIT = 10
 MAX_INTELLIGENCE_SEARCH_LIMIT = 40
 DEFAULT_TOP_TARGETS_MAX_DETAIL_LOOKUPS = 0
@@ -87,6 +96,155 @@ TOP_TARGET_ORG_AGGREGATION_KEYS = (
     "companies",
     "targeted_organizations",
 )
+IOC_STREAM_ENTITY_TYPES = {"all", "file", "domain", "url", "ip_address"}
+IOC_STREAM_ORIGINS = {"all", "subscriptions", "hunting"}
+IOC_STREAM_RISK_ORDER = {"Unknown": 0, "Low": 1, "Medium": 2, "High": 3}
+IOC_STREAM_DEFINITIONS = [
+    {
+        "term": "IoC",
+        "definition": "Indicator of Compromise: a technical clue such as a domain, URL, IP address, or file hash that may be linked to suspicious or malicious activity.",
+    },
+    {
+        "term": "Domain",
+        "definition": "A named internet destination, such as example.com, often used to identify websites, mail infrastructure, or command-and-control endpoints.",
+    },
+    {
+        "term": "URL",
+        "definition": "A full web address that can point to a specific page, file, redirect, phishing page, or payload location.",
+    },
+    {
+        "term": "IP address",
+        "definition": "A network address used by infrastructure. IP indicators should be reviewed carefully because ownership and hosting can change.",
+    },
+    {
+        "term": "File hash",
+        "definition": "A cryptographic fingerprint for a file, commonly used to identify malware samples or suspicious binaries.",
+    },
+    {
+        "term": "Collection",
+        "definition": "A GTI intelligence object grouping related indicators, context, reporting, or campaign information.",
+    },
+    {
+        "term": "Livehunt / Hunting ruleset",
+        "definition": "A hunting rule or ruleset that detects matching files or indicators and can generate stream notifications.",
+    },
+    {
+        "term": "Retrohunt",
+        "definition": "A historical hunt across previously seen data, useful for finding older matches to new detection logic.",
+    },
+    {
+        "term": "Threat Actor",
+        "definition": "An individual, group, or activity cluster associated with cyber threat activity.",
+    },
+    {
+        "term": "GTI score",
+        "definition": "A numeric risk signal when available. Higher scores indicate stronger malicious or suspicious context.",
+    },
+    {
+        "term": "Verdict",
+        "definition": "A GTI assessment label such as malicious, suspicious, benign, or unknown when exposed by the API response.",
+    },
+]
+
+MOCK_IOC_STREAM_PAYLOAD = {
+    "data": [
+        {
+            "id": "login-security-check.example",
+            "type": "domain",
+            "attributes": {
+                "entity_type": "domain",
+                "source_type": "collection",
+                "source_name": "Credential Theft Infrastructure",
+                "origin": "subscriptions",
+                "matched_date": "2026-05-20T10:12:00Z",
+                "gti_score": 91,
+                "gti_verdict": "malicious",
+            },
+        },
+        {
+            "id": "https://billing-example.net/session/verify",
+            "type": "url",
+            "attributes": {
+                "source_type": "Livehunt / Hunting ruleset",
+                "source_name": "Brand impersonation hunt",
+                "origin": "hunting",
+                "matched_date": "2026-05-20T09:42:00Z",
+                "score": 67,
+                "verdict": "suspicious",
+            },
+        },
+        {
+            "id": "44d88612fea8a8f36de82e1278abb02f",
+            "type": "file",
+            "attributes": {
+                "source_type": "Retrohunt",
+                "source_name": "Windows loader retrohunt",
+                "origin": "hunting",
+                "matched_date": "2026-05-19T18:15:00Z",
+                "gti_score": 82,
+                "gti_verdict": "malicious",
+            },
+        },
+        {
+            "id": "203.0.113.42",
+            "type": "ip_address",
+            "attributes": {
+                "source_type": "threat_actor",
+                "source_name": "Suspicious infrastructure cluster",
+                "origin": "subscriptions",
+                "matched_date": "2026-05-19T14:03:00Z",
+                "gti_score": 38,
+                "gti_verdict": "undetected",
+            },
+        },
+        {
+            "id": "cdn-update-check.example",
+            "type": "domain",
+            "attributes": {
+                "source_type": "collection",
+                "source_name": "Possible redirector set",
+                "origin": "subscriptions",
+                "matched_date": "2026-05-18T20:21:00Z",
+                "gti_score": 12,
+            },
+        },
+        {
+            "id": "https://unknown.example/download",
+            "type": "url",
+            "attributes": {
+                "source_type": "collection",
+                "origin": "subscriptions",
+                "matched_date": "2026-05-18T08:11:00Z",
+            },
+        },
+        {
+            "id": "8.8.8.8",
+            "type": "ip_address",
+            "attributes": {
+                "source_type": "collection",
+                "source_name": "Context-only network indicator",
+                "origin": "subscriptions",
+                "matched_date": "2026-05-17T11:00:00Z",
+                "gti_verdict": "unknown",
+            },
+        },
+        {
+            "id": "275a021bbfb6489e54d471899f7db9d1",
+            "type": "file",
+            "relationships": {
+                "source": {
+                    "data": {"id": "rule-loader-family", "type": "hunting_ruleset"}
+                }
+            },
+            "attributes": {
+                "origin": "hunting",
+                "notification_date": "2026-05-16T16:45:00Z",
+                "gti_assessment": {"score": 56, "verdict": "suspicious"},
+            },
+        },
+    ],
+    "links": {},
+}
 
 
 class GTIClientError(RuntimeError):
@@ -293,6 +451,511 @@ def intelligence_search(
         "simplified_preview": simplified_preview,
         "raw_data": payload,
     }
+
+
+def fetch_ioc_stream(
+    api_key: str,
+    limit: int = DEFAULT_IOC_STREAM_LIMIT,
+    entity_type: str = "all",
+    origin: str = "all",
+    descriptors_only: bool = False,
+    cursor: str | None = None,
+    order: str = "date",
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    """Fetch a bounded IoC Stream window from GTI without enriching indicators."""
+
+    normalized_api_key = api_key.strip()
+    normalized_start_date = _normalize_ioc_stream_date(start_date, "start_date")
+    normalized_end_date = _normalize_ioc_stream_date(end_date, "end_date")
+    normalized_entity_type = _normalize_ioc_stream_choice(
+        entity_type,
+        IOC_STREAM_ENTITY_TYPES,
+        "entity_type",
+    )
+    normalized_origin = _normalize_ioc_stream_choice(
+        origin,
+        IOC_STREAM_ORIGINS,
+        "origin",
+    )
+    normalized_cursor = cursor.strip() if cursor else ""
+
+    if not normalized_api_key:
+        raise ValueError("A GTI/VirusTotal API key is required for IoC Stream.")
+    if limit < 1:
+        raise ValueError("The IoC Stream limit must be at least 1.")
+    if order and order != "date":
+        raise ValueError("The IoC Stream order must be 'date'.")
+
+    normalized_limit = min(limit, MAX_IOC_STREAM_LIMIT)
+    filters: list[str] = []
+    if normalized_entity_type != "all":
+        filters.append(f"entity_type:{normalized_entity_type}")
+    if normalized_origin != "all":
+        filters.append(f"origin:{normalized_origin}")
+
+    base_params: dict[str, Any] = {
+        "descriptors_only": "true" if descriptors_only else "false",
+        "order": "date",
+    }
+    if filters:
+        base_params["filter"] = " ".join(filters)
+    request_params: dict[str, Any] = {
+        **base_params,
+        "requested_limit": normalized_limit,
+        "api_page_limit": IOC_STREAM_API_PAGE_LIMIT,
+    }
+    if normalized_cursor:
+        request_params["cursor"] = normalized_cursor
+    date_filtering = _build_ioc_stream_date_filtering_metadata(
+        normalized_start_date,
+        normalized_end_date,
+    )
+
+    if normalized_api_key.casefold() in {"mock", "sample", "demo"}:
+        payload = _filter_mock_ioc_stream_payload(
+            MOCK_IOC_STREAM_PAYLOAD,
+            limit=normalized_limit,
+            entity_type=normalized_entity_type,
+            origin=normalized_origin,
+        )
+        return {
+            "status_code": 200,
+            "total_collected": len(_extract_api_items(payload)),
+            "next_cursor": None,
+            "raw_data": payload,
+            "date_filtering": date_filtering,
+            "endpoint_results": [
+                {
+                    "endpoint_name": "ioc_stream_mock",
+                    "http_status": 200,
+                    "request_params": {
+                        **base_params,
+                        "limit": min(normalized_limit, IOC_STREAM_API_PAGE_LIMIT),
+                    },
+                }
+            ],
+            "request_params": request_params,
+        }
+
+    collected_items: list[dict[str, Any]] = []
+    endpoint_results: list[dict[str, Any]] = []
+    page_payloads: list[Any] = []
+    current_cursor = normalized_cursor
+    next_cursor: str | None = None
+    final_status_code = 0
+    warnings: list[str] = []
+
+    while len(collected_items) < normalized_limit:
+        page_limit = min(
+            normalized_limit - len(collected_items),
+            IOC_STREAM_API_PAGE_LIMIT,
+        )
+        params = {**base_params, "limit": page_limit}
+        if current_cursor:
+            params["cursor"] = current_cursor
+
+        endpoint_result = _probe_json_endpoint(
+            api_key=normalized_api_key,
+            url=VIRUSTOTAL_IOC_STREAM_URL,
+            params=params,
+            endpoint_name="ioc_stream",
+        )
+        endpoint_result = {**endpoint_result, "request_params": params}
+        endpoint_results.append(endpoint_result)
+        payload = endpoint_result["raw_json"]
+        final_status_code = int(endpoint_result["http_status"])
+
+        if final_status_code != 200:
+            if collected_items:
+                warnings.append(
+                    f"IoC Stream pagination stopped after HTTP {final_status_code}."
+                )
+                final_status_code = 200
+                break
+            return {
+                "status_code": final_status_code,
+                "total_collected": 0,
+                "next_cursor": None,
+                "raw_data": payload,
+                "date_filtering": date_filtering,
+                "endpoint_results": endpoint_results,
+                "request_params": request_params,
+                "warnings": warnings,
+            }
+
+        page_payloads.append(payload)
+        page_items = _extract_api_items(payload)
+        remaining_slots = normalized_limit - len(collected_items)
+        collected_items.extend(page_items[:remaining_slots])
+
+        next_cursor = _extract_next_cursor(payload)
+        if not next_cursor:
+            next_link_url = _extract_next_link_from_headers(
+                endpoint_result.get("response_headers", {})
+            )
+            if next_link_url:
+                next_cursor = _extract_cursor_from_url(next_link_url)
+
+        if not next_cursor or not page_items:
+            break
+
+        current_cursor = next_cursor
+
+    return {
+        "status_code": final_status_code,
+        "total_collected": len(collected_items),
+        "next_cursor": next_cursor,
+        "raw_data": {"data": collected_items, "pages": page_payloads},
+        "date_filtering": date_filtering,
+        "endpoint_results": endpoint_results,
+        "request_params": request_params,
+        "warnings": warnings,
+    }
+
+
+def normalize_ioc_stream_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Normalize one IoC Stream item into report-friendly fields."""
+
+    attributes = item.get("attributes", {})
+    normalized_attributes = attributes if isinstance(attributes, dict) else {}
+    relationships = item.get("relationships", {})
+    normalized_relationships = relationships if isinstance(relationships, dict) else {}
+    merged_fields = _merge_item_with_attributes(item, normalized_attributes)
+
+    entity_type = _normalize_ioc_entity_type(
+        _first_present(
+            merged_fields,
+            ("entity_type", "indicator_type", "type", "object_type"),
+        )
+    )
+    value = _extract_ioc_value(item, normalized_attributes, entity_type)
+    source_type = _extract_ioc_source_type(merged_fields, normalized_relationships)
+    source_name = _extract_ioc_source_name(merged_fields, normalized_relationships)
+    origin = _stringify_value(
+        _first_present(
+            merged_fields,
+            ("origin", "source_origin", "notification_origin"),
+        )
+    ) or "Unknown"
+    matched_date = _stringify_value(
+        _first_present(
+            merged_fields,
+            (
+                "matched_date",
+                "notification_date",
+                "created_at",
+                "creation_date",
+                "date",
+                "last_modification_date",
+            ),
+        )
+    )
+    gti_score = _extract_ioc_score(merged_fields)
+    gti_verdict = _extract_ioc_verdict(merged_fields)
+    classification = classify_ioc_risk(gti_score, gti_verdict)
+
+    return {
+        "value": value,
+        "entity_type": entity_type,
+        "source_type": source_type,
+        "source_name": source_name,
+        "origin": origin,
+        "matched_date": matched_date,
+        "gti_score": gti_score,
+        "gti_verdict": gti_verdict,
+        "malicious": None,
+        "suspicious": None,
+        "reputation": None,
+        "risk": classification["risk"],
+        "severity": classification["risk"],
+        "recommended_action": classification["recommended_action"],
+        "enrichment_status": "not_requested",
+        "explanation": _build_ioc_explanation(
+            entity_type=entity_type,
+            severity=classification["risk"],
+            source_type=source_type,
+            verdict=gti_verdict,
+            score=gti_score,
+        ),
+    }
+
+
+def classify_ioc_risk(
+    gti_score: int | float | None,
+    gti_verdict: str | None,
+) -> dict[str, str]:
+    """Classify an IoC using GTI score and verdict guardrails."""
+
+    if gti_score is None:
+        risk = "Unknown"
+        action = "Manual review"
+    elif gti_score >= 80:
+        risk = "High"
+        action = "Investigate / block if confirmed"
+    elif gti_score >= 50:
+        risk = "Medium"
+        action = "Investigate / monitor"
+    else:
+        risk = "Low"
+        action = "Monitor"
+
+    verdict = (gti_verdict or "").casefold()
+    if "malicious" in verdict and IOC_STREAM_RISK_ORDER[risk] < IOC_STREAM_RISK_ORDER["High"]:
+        risk = "High"
+        action = "Investigate / block if confirmed"
+    elif "suspicious" in verdict and IOC_STREAM_RISK_ORDER[risk] < IOC_STREAM_RISK_ORDER["Medium"]:
+        risk = "Medium"
+        action = "Investigate / monitor"
+
+    return {"risk": risk, "recommended_action": action}
+
+
+def enrich_ioc_indicator(api_key: str, indicator: dict[str, Any]) -> dict[str, Any]:
+    """Best-effort enrichment for one IoC Stream indicator."""
+
+    enriched_indicator = dict(indicator)
+    entity_type = str(enriched_indicator.get("entity_type") or "")
+    value = str(enriched_indicator.get("value") or "").strip()
+
+    if not value:
+        enriched_indicator["enrichment_status"] = "skipped"
+        enriched_indicator["enrichment_error"] = "Indicator value is missing."
+        return enriched_indicator
+
+    if api_key.strip().casefold() in {"mock", "sample", "demo"}:
+        enrichment = _build_mock_ioc_enrichment(enriched_indicator)
+    else:
+        try:
+            enrichment = _fetch_ioc_enrichment(
+                api_key=api_key,
+                entity_type=entity_type,
+                value=value,
+            )
+        except GTIClientError as exc:
+            enriched_indicator["enrichment_status"] = "error"
+            enriched_indicator["enrichment_error"] = str(exc)
+            return enriched_indicator
+
+    if enrichment.get("status") != "success":
+        enriched_indicator["enrichment_status"] = str(enrichment.get("status") or "error")
+        enriched_indicator["enrichment_http_status"] = enrichment.get("http_status")
+        enriched_indicator["enrichment_error"] = str(
+            enrichment.get("error") or "Enrichment failed."
+        )
+        return enriched_indicator
+
+    malicious = _safe_int(enrichment.get("malicious"))
+    suspicious = _safe_int(enrichment.get("suspicious"))
+    reputation = _coerce_ioc_number(enrichment.get("reputation"))
+    classification = classify_enriched_ioc_risk(
+        malicious=malicious,
+        suspicious=suspicious,
+        reputation=reputation,
+        fallback_risk=str(enriched_indicator.get("severity") or "Unknown"),
+    )
+
+    enriched_indicator.update(
+        {
+            "malicious": malicious,
+            "suspicious": suspicious,
+            "reputation": reputation,
+            "risk": classification["risk"],
+            "severity": classification["risk"],
+            "recommended_action": classification["recommended_action"],
+            "enrichment_status": "success",
+            "enrichment_http_status": enrichment.get("http_status"),
+            "explanation": _build_enriched_ioc_explanation(
+                indicator=enriched_indicator,
+                malicious=malicious,
+                suspicious=suspicious,
+                reputation=reputation,
+                risk=classification["risk"],
+            ),
+        }
+    )
+    return enriched_indicator
+
+
+def classify_enriched_ioc_risk(
+    malicious: int,
+    suspicious: int,
+    reputation: int | float | None,
+    fallback_risk: str = "Unknown",
+) -> dict[str, str]:
+    """Classify an enriched IoC from VT/GTI analysis stats and reputation."""
+
+    if malicious > 0:
+        return {
+            "risk": "High",
+            "recommended_action": "Investigate / block if confirmed",
+        }
+    if suspicious > 0:
+        return {
+            "risk": "Medium",
+            "recommended_action": "Investigate / monitor",
+        }
+    if reputation is not None and reputation < -10:
+        return {
+            "risk": "Medium",
+            "recommended_action": "Investigate / monitor",
+        }
+    if reputation is not None and reputation < 0:
+        return {"risk": "Low", "recommended_action": "Monitor"}
+
+    fallback = fallback_risk if fallback_risk in IOC_STREAM_RISK_ORDER else "Unknown"
+    if fallback == "High":
+        return {
+            "risk": "High",
+            "recommended_action": "Investigate / block if confirmed",
+        }
+    if fallback == "Medium":
+        return {"risk": "Medium", "recommended_action": "Investigate / monitor"}
+    if fallback == "Low":
+        return {"risk": "Low", "recommended_action": "Monitor"}
+    return {"risk": "Unknown", "recommended_action": "Manual review"}
+
+
+def build_ioc_stream_report(
+    stream_result: dict[str, Any],
+    api_key: str | None = None,
+    enrich: bool = False,
+    enrichment_limit: int = DEFAULT_IOC_STREAM_ENRICHMENT_LIMIT,
+) -> dict[str, Any]:
+    """Build client-friendly IoC Stream metrics and summaries."""
+
+    payload = stream_result.get("raw_data")
+    indicators = [
+        normalize_ioc_stream_item(item)
+        for item in _extract_api_items(payload)
+    ]
+    enrichment_attempted = 0
+    enrichment_succeeded = 0
+    enrichment_errors = 0
+
+    if enrich and api_key and indicators:
+        effective_enrichment_limit = min(
+            max(enrichment_limit, 0),
+            DEFAULT_IOC_STREAM_ENRICHMENT_LIMIT,
+            len(indicators),
+        )
+        for index in range(effective_enrichment_limit):
+            enrichment_attempted += 1
+            indicators[index] = enrich_ioc_indicator(api_key, indicators[index])
+            if indicators[index].get("enrichment_status") == "success":
+                enrichment_succeeded += 1
+            else:
+                enrichment_errors += 1
+
+    total = len(indicators)
+    entity_counts = _count_ioc_field(indicators, "entity_type")
+    risk_counts = _count_ioc_field(indicators, "severity")
+    source_counts = _count_ioc_field(indicators, "source_type")
+    action_counts = _count_ioc_field(indicators, "recommended_action")
+    main_entity_type = _main_ioc_bucket(entity_counts)
+    main_source_type = _main_ioc_bucket(source_counts)
+    sorted_indicators = sorted(
+        indicators,
+        key=lambda indicator: (
+            -IOC_STREAM_RISK_ORDER.get(str(indicator.get("severity")), 0),
+            -(indicator.get("gti_score") if indicator.get("gti_score") is not None else -1),
+            str(indicator.get("value") or ""),
+        ),
+    )
+
+    summary = {
+        "total_iocs": total,
+        "high_risk": risk_counts.get("High", 0),
+        "medium_risk": risk_counts.get("Medium", 0),
+        "low_risk": risk_counts.get("Low", 0),
+        "unknown_risk": risk_counts.get("Unknown", 0),
+        "main_entity_type": main_entity_type,
+        "main_source_type": main_source_type,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    return {
+        "summary": summary,
+        "charts": {
+            "by_entity_type": _counter_to_chart_rows(entity_counts),
+            "by_risk": _counter_to_chart_rows(
+                risk_counts,
+                preferred_order=("High", "Medium", "Low", "Unknown"),
+            ),
+            "by_source_type": _counter_to_chart_rows(source_counts),
+            "by_recommended_action": _counter_to_chart_rows(action_counts),
+        },
+        "top_indicators": sorted_indicators[:10],
+        "business_summary": build_business_summary(summary),
+        "definitions": IOC_STREAM_DEFINITIONS,
+        "indicators": indicators,
+        "technical_details": {
+            "status_code": int(stream_result.get("status_code", 0)),
+            "next_cursor": stream_result.get("next_cursor"),
+            "request_params": stream_result.get("request_params", {}),
+            "endpoint_results": stream_result.get("endpoint_results", []),
+            "warnings": stream_result.get("warnings", []),
+            "date_filtering": stream_result.get(
+                "date_filtering",
+                _build_ioc_stream_date_filtering_metadata(None, None),
+            ),
+            "enrichment": {
+                "enabled": bool(enrich),
+                "limit": DEFAULT_IOC_STREAM_ENRICHMENT_LIMIT,
+                "attempted": enrichment_attempted,
+                "succeeded": enrichment_succeeded,
+                "errors": enrichment_errors,
+            },
+        },
+    }
+
+
+def build_business_summary(summary: dict[str, Any]) -> list[str]:
+    """Generate simple non-technical interpretation text from report stats."""
+
+    total = _safe_int(summary.get("total_iocs"))
+    high_risk = _safe_int(summary.get("high_risk"))
+    unknown_risk = _safe_int(summary.get("unknown_risk"))
+    main_entity_type = str(summary.get("main_entity_type") or "Unknown")
+    messages: list[str] = []
+
+    if main_entity_type in {"domain", "url"}:
+        messages.append(
+            "Most indicators are web-based, which may point to phishing, malicious redirects, credential harvesting pages, or command-and-control infrastructure."
+        )
+    elif main_entity_type == "file":
+        messages.append(
+            "File indicators dominate the stream, which makes endpoint protection and malware analysis especially relevant."
+        )
+    elif main_entity_type == "ip_address":
+        messages.append(
+            "IP indicators can support firewall and network monitoring use cases, but should be reviewed carefully because IP ownership may change."
+        )
+    elif total == 0:
+        messages.append("No IoC Stream notifications were returned for the selected filters.")
+    else:
+        messages.append(
+            "The stream contains a mixed set of indicator types, so triage should combine endpoint, web, and network review."
+        )
+
+    if high_risk > 0:
+        messages.append("Several indicators require urgent investigation or blocking after validation.")
+    else:
+        messages.append(
+            "No high-risk indicator was identified from available score, verdict, or enrichment context; this does not make unknown indicators safe."
+        )
+
+    if total > 0 and unknown_risk >= max(3, total // 3):
+        messages.append(
+            "A significant part of the stream lacks enough scoring context and should be reviewed manually."
+        )
+    elif unknown_risk > 0:
+        messages.append("Some indicators lack scoring context and should be checked before action is taken.")
+    else:
+        messages.append("The returned indicators include scoring context for an initial triage view.")
+
+    return messages[:3]
 
 
 def get_collection_details(
@@ -2438,6 +3101,427 @@ def _stringify_value(value: Any) -> str | None:
         return None
 
     return str(value)
+
+
+def _normalize_ioc_stream_choice(
+    value: str,
+    allowed_values: set[str],
+    field_name: str,
+) -> str:
+    normalized_value = (value or "all").strip().casefold()
+    if normalized_value not in allowed_values:
+        allowed_display = ", ".join(sorted(allowed_values))
+        raise ValueError(f"Invalid {field_name}. Allowed values: {allowed_display}.")
+    return normalized_value
+
+
+def _normalize_ioc_stream_date(value: str | None, field_name: str) -> str | None:
+    normalized_value = (value or "").strip()
+    if not normalized_value:
+        return None
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized_value):
+        raise ValueError(f"Invalid {field_name}. Expected YYYY-MM-DD.")
+    return normalized_value
+
+
+def _build_ioc_stream_date_filtering_metadata(
+    start_date: str | None,
+    end_date: str | None,
+) -> dict[str, Any]:
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "api_filter_applied": False,
+        "local_post_filtering_applied": False,
+        "note": (
+            "Selected dates are shown for reporting context only; local post-filtering "
+            "not yet implemented."
+            if start_date or end_date
+            else ""
+        ),
+    }
+
+
+def _filter_mock_ioc_stream_payload(
+    payload: dict[str, Any],
+    limit: int,
+    entity_type: str,
+    origin: str,
+) -> dict[str, Any]:
+    items = []
+    for item in _extract_api_items(payload):
+        normalized_item = normalize_ioc_stream_item(item)
+        if entity_type != "all" and normalized_item["entity_type"] != entity_type:
+            continue
+        if origin != "all" and normalized_item["origin"].casefold() != origin:
+            continue
+        items.append(item)
+
+    return {"data": items[:limit], "links": payload.get("links", {})}
+
+
+def _normalize_ioc_entity_type(value: Any) -> str:
+    text = str(value or "").strip().casefold().replace("-", "_")
+    aliases = {
+        "ip": "ip_address",
+        "ip-address": "ip_address",
+        "ipaddress": "ip_address",
+        "ipv4": "ip_address",
+        "ipv6": "ip_address",
+        "hash": "file",
+        "file_hash": "file",
+    }
+    return aliases.get(text, text or "Unknown")
+
+
+def _extract_ioc_value(
+    item: dict[str, Any],
+    attributes: dict[str, Any],
+    entity_type: str,
+) -> str:
+    candidate_keys = (
+        "value",
+        "indicator",
+        "ioc",
+        "entity_id",
+        entity_type,
+        "url",
+        "domain",
+        "ip_address",
+        "sha256",
+        "sha1",
+        "md5",
+        "meaningful_name",
+    )
+    for source in (attributes, item):
+        value = _first_present(source, candidate_keys)
+        text = _stringify_value(value)
+        if text and text.strip():
+            return text.strip()
+
+    item_id = _stringify_value(item.get("id"))
+    return item_id.strip() if item_id else "Unknown"
+
+
+def _extract_ioc_source_type(
+    fields: dict[str, Any],
+    relationships: dict[str, Any],
+) -> str:
+    direct_value = _first_present(
+        fields,
+        (
+            "source_type",
+            "source_kind",
+            "source_entity_type",
+            "collection_type",
+            "ruleset_type",
+        ),
+    )
+    text = _readable_ioc_value(direct_value)
+    if text:
+        return text
+
+    for relationship_name, relationship_value in relationships.items():
+        relationship_type = _extract_relationship_type(relationship_value)
+        if relationship_type:
+            return relationship_type
+        if relationship_name:
+            return str(relationship_name)
+
+    return "Unknown"
+
+
+def _extract_ioc_source_name(
+    fields: dict[str, Any],
+    relationships: dict[str, Any],
+) -> str:
+    direct_value = _first_present(
+        fields,
+        (
+            "source_name",
+            "source_title",
+            "collection_name",
+            "collection_title",
+            "ruleset_name",
+            "rule_name",
+            "actor_name",
+            "name",
+            "title",
+        ),
+    )
+    text = _readable_ioc_value(direct_value)
+    if text:
+        return text
+
+    for relationship_value in relationships.values():
+        relationship_name = _extract_relationship_name(relationship_value)
+        if relationship_name:
+            return relationship_name
+
+    return "Unknown"
+
+
+def _extract_relationship_type(value: Any) -> str | None:
+    if isinstance(value, dict):
+        data = value.get("data")
+        if isinstance(data, dict):
+            return _readable_ioc_value(data.get("type"))
+        if isinstance(data, list) and data:
+            return _extract_relationship_type({"data": data[0]})
+        return _readable_ioc_value(value.get("type"))
+    return None
+
+
+def _extract_relationship_name(value: Any) -> str | None:
+    if isinstance(value, dict):
+        data = value.get("data")
+        if isinstance(data, dict):
+            return _readable_ioc_value(
+                _first_present(data, ("name", "title", "id", "label"))
+            )
+        if isinstance(data, list) and data:
+            return _extract_relationship_name({"data": data[0]})
+        return _readable_ioc_value(
+            _first_present(value, ("name", "title", "id", "label"))
+        )
+    return None
+
+
+def _extract_ioc_score(fields: dict[str, Any]) -> int | float | None:
+    direct_score = _first_present(
+        fields,
+        (
+            "gti_score",
+            "score",
+            "threat_score",
+            "risk_score",
+            "maliciousness_score",
+        ),
+    )
+    score = _coerce_ioc_number(direct_score)
+    if score is not None:
+        return score
+
+    assessment = fields.get("gti_assessment")
+    if isinstance(assessment, dict):
+        for key in ("score", "gti_score", "threat_score", "risk_score"):
+            score = _coerce_ioc_number(assessment.get(key))
+            if score is not None:
+                return score
+
+    return None
+
+
+def _extract_ioc_verdict(fields: dict[str, Any]) -> str:
+    direct_value = _first_present(
+        fields,
+        (
+            "gti_verdict",
+            "verdict",
+            "assessment_verdict",
+            "maliciousness",
+            "classification",
+        ),
+    )
+    text = _readable_ioc_value(direct_value)
+    if text:
+        return text
+
+    assessment = fields.get("gti_assessment")
+    if isinstance(assessment, dict):
+        text = _readable_ioc_value(
+            _first_present(
+                assessment,
+                ("verdict", "gti_verdict", "assessment_verdict", "classification"),
+            )
+        )
+        if text:
+            return text
+
+    return "Unknown"
+
+
+def _fetch_ioc_enrichment(
+    api_key: str,
+    entity_type: str,
+    value: str,
+) -> dict[str, Any]:
+    lookup_url = _build_ioc_enrichment_url(entity_type, value)
+    if not lookup_url:
+        return {
+            "status": "unsupported",
+            "http_status": None,
+            "error": f"Unsupported IoC type for enrichment: {entity_type}.",
+        }
+
+    endpoint_result = _probe_json_endpoint(
+        api_key=api_key.strip(),
+        url=lookup_url,
+        params=None,
+        endpoint_name=f"ioc_enrichment_{entity_type}",
+    )
+    http_status = int(endpoint_result.get("http_status", 0))
+    if http_status != 200:
+        return {
+            "status": "rate_limited" if http_status == 429 else "error",
+            "http_status": http_status,
+            "error": _extract_api_error_detail(endpoint_result.get("raw_json")),
+        }
+
+    attributes = _extract_ioc_enrichment_attributes(endpoint_result.get("raw_json"))
+    stats = attributes.get("last_analysis_stats")
+    normalized_stats = stats if isinstance(stats, dict) else {}
+    return {
+        "status": "success",
+        "http_status": http_status,
+        "malicious": _safe_int(normalized_stats.get("malicious")),
+        "suspicious": _safe_int(normalized_stats.get("suspicious")),
+        "reputation": _coerce_ioc_number(attributes.get("reputation")),
+    }
+
+
+def _build_ioc_enrichment_url(entity_type: str, value: str) -> str | None:
+    normalized_type = _normalize_ioc_entity_type(entity_type)
+    if normalized_type == "domain":
+        return VIRUSTOTAL_DOMAIN_LOOKUP_URL.format(quote(value, safe=""))
+    if normalized_type == "ip_address":
+        return VIRUSTOTAL_IP_ADDRESS_LOOKUP_URL.format(quote(value, safe=""))
+    if normalized_type == "url":
+        encoded_url_id = base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
+        return VIRUSTOTAL_URL_LOOKUP_URL.format(encoded_url_id)
+    if normalized_type == "file":
+        return VIRUSTOTAL_FILE_LOOKUP_URL.format(quote(value, safe=""))
+    return None
+
+
+def _extract_ioc_enrichment_attributes(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return {}
+    attributes = data.get("attributes")
+    return attributes if isinstance(attributes, dict) else {}
+
+
+def _build_mock_ioc_enrichment(indicator: dict[str, Any]) -> dict[str, Any]:
+    severity = str(indicator.get("severity") or "Unknown")
+    if severity == "High":
+        malicious, suspicious, reputation = 7, 1, -45
+    elif severity == "Medium":
+        malicious, suspicious, reputation = 0, 4, -12
+    elif severity == "Low":
+        malicious, suspicious, reputation = 0, 0, -2
+    else:
+        malicious, suspicious, reputation = 0, 0, None
+    return {
+        "status": "success",
+        "http_status": 200,
+        "malicious": malicious,
+        "suspicious": suspicious,
+        "reputation": reputation,
+    }
+
+
+def _build_enriched_ioc_explanation(
+    indicator: dict[str, Any],
+    malicious: int,
+    suspicious: int,
+    reputation: int | float | None,
+    risk: str,
+) -> str:
+    reputation_text = "not returned" if reputation is None else str(reputation)
+    return (
+        f"{indicator.get('entity_type', 'Unknown')} indicator enriched with "
+        f"{malicious} malicious and {suspicious} suspicious vendor result(s); "
+        f"reputation {reputation_text}. Classified as {risk}."
+    )
+
+
+def _coerce_ioc_number(value: Any) -> int | float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            number = float(text)
+        except ValueError:
+            return None
+        return int(number) if number.is_integer() else number
+    return None
+
+
+def _readable_ioc_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        nested_value = _first_present(
+            value,
+            ("name", "title", "label", "value", "id", "type"),
+        )
+        return _readable_ioc_value(nested_value)
+    if isinstance(value, list):
+        for item in value:
+            text = _readable_ioc_value(item)
+            if text:
+                return text
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _build_ioc_explanation(
+    entity_type: str,
+    severity: str,
+    source_type: str,
+    verdict: str,
+    score: int | float | None,
+) -> str:
+    score_text = "no GTI score" if score is None else f"GTI score {score}"
+    verdict_text = verdict if verdict and verdict != "Unknown" else "no explicit verdict"
+    return (
+        f"{entity_type} indicator from {source_type}; {score_text} and "
+        f"{verdict_text}. Classified as {severity} for initial triage."
+    )
+
+
+def _count_ioc_field(
+    indicators: list[dict[str, Any]],
+    field_name: str,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for indicator in indicators:
+        label = str(indicator.get(field_name) or "Unknown")
+        counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def _main_ioc_bucket(counts: dict[str, int]) -> str:
+    if not counts:
+        return "Unknown"
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0].casefold()))[0][0]
+
+
+def _counter_to_chart_rows(
+    counts: dict[str, int],
+    preferred_order: tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
+    order_index = {label: index for index, label in enumerate(preferred_order)}
+    return [
+        {"label": label, "value": count}
+        for label, count in sorted(
+            counts.items(),
+            key=lambda item: (
+                order_index.get(item[0], len(order_index)),
+                -item[1],
+                item[0].casefold(),
+            ),
+        )
+    ]
 
 
 def get_top_industries(

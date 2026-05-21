@@ -7,6 +7,7 @@ const apiKeyBlock = apiKeyField?.closest(".form-block");
 const generateButton = document.getElementById("generate-button");
 const reportOutput = document.getElementById("report-output");
 const dtmDashboardOutput = document.getElementById("dtm-dashboard-output");
+const iocStreamOutput = document.getElementById("ioc-stream-output");
 const rawJsonOutput = document.getElementById("raw-json-output");
 const crossAnalysisOutput = document.getElementById("cross-analysis-output");
 const diagnosticsOutput = document.getElementById("diagnostics-output");
@@ -44,6 +45,17 @@ const topTargetsButton = document.getElementById("top-targets-button");
 const dtmDashboardFields = document.getElementById("dtm-dashboard-fields");
 const dtmDashboardActions = document.getElementById("dtm-dashboard-actions");
 const dtmDashboardButton = document.getElementById("dtm-dashboard-button");
+const iocStreamFields = document.getElementById("ioc-stream-fields");
+const iocStreamActions = document.getElementById("ioc-stream-actions");
+const iocStreamButton = document.getElementById("ioc-stream-button");
+const iocStreamLimitField = document.getElementById("ioc_stream_limit");
+const iocStreamStartDateField = document.getElementById("ioc_stream_start_date");
+const iocStreamEndDateField = document.getElementById("ioc_stream_end_date");
+const iocStreamEntityTypeField = document.getElementById("ioc_stream_entity_type");
+const iocStreamOriginField = document.getElementById("ioc_stream_origin");
+const iocStreamEnrichField = document.getElementById("ioc_stream_enrich");
+const iocStreamDescriptorsOnlyField = document.getElementById("ioc_stream_descriptors_only");
+const iocStreamDocxButton = document.getElementById("ioc-stream-docx-button");
 const dtmDashboardSinceField = document.getElementById("dtm_dashboard_since");
 const dtmDashboardUntilField = document.getElementById("dtm_dashboard_until");
 const dtmDashboardMaxPagesField = document.getElementById("dtm_dashboard_max_pages");
@@ -80,6 +92,7 @@ const IOC_ENRICHMENT = "IoC Enrichment";
 const INDUSTRY_SNAPSHOT_EXPLORER = "Industry Snapshot Explorer";
 const COMPANY_EXPOSURE_DTM = "Company Exposure / DTM";
 const DTM_DASHBOARD = "DTM Monitor & Alert Dashboard";
+const IOC_STREAM_REPORT = "IoC Stream Report";
 const GTI_INTELLIGENCE_SEARCH = "GTI Intelligence Search";
 const TOP_TARGETS_RANKING = "Top Targets Ranking";
 const TOP_TARGETS_SEARCH_PAGE_SIZE = 40;
@@ -148,6 +161,12 @@ const MODE_META = {
         emptyTitle: "Ready to load the DTM dashboard",
         emptyText: "Choose a date range and page limit, then click Run Dashboard.",
     },
+    [IOC_STREAM_REPORT]: {
+        label: "IoC Stream Report",
+        description: "Builds a client-friendly report from recent GTI IoC Stream notifications with metrics, charts, explanations, and recommended actions.",
+        emptyTitle: "Ready to build an IoC Stream report",
+        emptyText: "Choose filters, then click Generate IoC Stream Report.",
+    },
     [GTI_INTELLIGENCE_SEARCH]: {
         label: "GTI Intelligence Search",
         description: "Free-text search across GTI objects — collections, files, and threat actors. Use preset queries or write your own to explore available intelligence.",
@@ -169,6 +188,7 @@ let lastIntelligenceSearchResponse = null;
 let lastCollectionAnalysisResponse = null;
 let lastTopTargetsResponse = null;
 let lastDtmDashboardResponse = null;
+let lastIocStreamResponse = null;
 let activeCollectionAnalysisId = "";
 let collectionAnalysisInProgressId = "";
 let dtmMonitorSortKey = "risk_score";
@@ -355,6 +375,15 @@ function setDtmDashboardLoadingState(isLoading) {
     updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
 }
 
+function setIocStreamLoadingState(isLoading) {
+    iocStreamButton.disabled = isLoading;
+    if (iocStreamDocxButton) {
+        iocStreamDocxButton.disabled = isLoading || !lastIocStreamResponse;
+    }
+    iocStreamButton.textContent = isLoading ? "Generating IoC Stream Report..." : "Generate IoC Stream Report";
+    updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
+}
+
 function setTopTargetsDocxState(isReady, isExporting = false) {
     if (!topTargetsDocxButton) {
         return;
@@ -362,6 +391,17 @@ function setTopTargetsDocxState(isReady, isExporting = false) {
     topTargetsDocxButton.hidden = !isReady;
     topTargetsDocxButton.disabled = !isReady || isExporting;
     topTargetsDocxButton.textContent = isExporting
+        ? "Exporting Word report..."
+        : "Export Word Report";
+}
+
+function setIocStreamDocxState(isReady, isExporting = false) {
+    if (!iocStreamDocxButton) {
+        return;
+    }
+    iocStreamDocxButton.hidden = !isReady;
+    iocStreamDocxButton.disabled = !isReady || isExporting;
+    iocStreamDocxButton.textContent = isExporting
         ? "Exporting Word report..."
         : "Export Word Report";
 }
@@ -536,7 +576,8 @@ function syncTargetRequirement() {
     const isIntelligenceSearch = reportTypeField.value === GTI_INTELLIGENCE_SEARCH;
     const isTopTargets = reportTypeField.value === TOP_TARGETS_RANKING;
     const isDtmDashboard = reportTypeField.value === DTM_DASHBOARD;
-    const isSpecialMode = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch || isTopTargets || isDtmDashboard;
+    const isIocStream = reportTypeField.value === IOC_STREAM_REPORT;
+    const isSpecialMode = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch || isTopTargets || isDtmDashboard || isIocStream;
 
     if (apiKeyBlock) {
         apiKeyBlock.hidden = false;
@@ -556,6 +597,8 @@ function syncTargetRequirement() {
     topTargetsActions.hidden = !isTopTargets;
     dtmDashboardFields.hidden = !isDtmDashboard;
     dtmDashboardActions.hidden = !isDtmDashboard;
+    iocStreamFields.hidden = !isIocStream;
+    iocStreamActions.hidden = !isIocStream;
 
     targetField.required = (
         isIocEnrichment
@@ -564,6 +607,7 @@ function syncTargetRequirement() {
         && !isIntelligenceSearch
         && !isTopTargets
         && !isDtmDashboard
+        && !isIocStream
     );
     intelligenceQueryField.required = isIntelligenceSearch;
     targetField.placeholder = isIocEnrichment ? "example.com" : "Company, region, or industry";
@@ -575,6 +619,7 @@ function syncTargetRequirement() {
         setDownloadState(false);
     }
     setTopTargetsDocxState(isTopTargets && Boolean(lastTopTargetsResponse));
+    setIocStreamDocxState(isIocStream && Boolean(lastIocStreamResponse));
 
     updateModeCard(reportTypeField.value);
     updateEmptyState(reportTypeField.value);
@@ -1591,6 +1636,65 @@ function renderRankingTable(
     `;
 }
 
+const CHART_PALETTE = ["#0D7F7A","#1A9E98","#0A5F5B","#15B0A8","#086560","#20C4BB","#053E3B","#25D4CA"];
+
+function renderDonutChartSvg(items, maxItems = 8) {
+    const rows = items.slice(0, maxItems);
+    if (!rows.length) return "";
+    const total = rows.reduce((s, r) => s + Number(r.collection_count || 0), 0);
+    if (!total) return "";
+    const CX = 85, CY = 85, R = 70, RI = 42, VW = 360, VH = 170, LEG_X = CX * 2 + 20;
+    let angle = -Math.PI / 2;
+    const slices = rows.map((row, i) => {
+        const count = Number(row.collection_count || 0);
+        const frac = count / total;
+        const sweep = frac * 2 * Math.PI;
+        const a1 = angle, a2 = angle + sweep;
+        angle = a2;
+        const color = CHART_PALETTE[i % CHART_PALETTE.length];
+        const pct = Math.round(frac * 100);
+        let path;
+        if (rows.length === 1 || sweep >= 2 * Math.PI - 0.001) {
+            path = `M ${CX - R} ${CY} A ${R} ${R} 0 1 1 ${CX + R} ${CY} A ${R} ${R} 0 1 1 ${CX - R} ${CY} ` +
+                `M ${CX - RI} ${CY} A ${RI} ${RI} 0 1 0 ${CX + RI} ${CY} A ${RI} ${RI} 0 1 0 ${CX - RI} ${CY} Z`;
+        } else {
+            const large = sweep > Math.PI ? 1 : 0;
+            const x1o = CX + R * Math.cos(a1), y1o = CY + R * Math.sin(a1);
+            const x2o = CX + R * Math.cos(a2), y2o = CY + R * Math.sin(a2);
+            const x1i = CX + RI * Math.cos(a1), y1i = CY + RI * Math.sin(a1);
+            const x2i = CX + RI * Math.cos(a2), y2i = CY + RI * Math.sin(a2);
+            path = `M ${x1i} ${y1i} L ${x1o} ${y1o} A ${R} ${R} 0 ${large} 1 ${x2o} ${y2o} L ${x2i} ${y2i} A ${RI} ${RI} 0 ${large} 0 ${x1i} ${y1i} Z`;
+        }
+        return { path, color, name: String(row.name || ""), pct };
+    });
+    const paths = slices.map((s) => `<path d="${s.path}" fill="${s.color}"/>`).join("");
+    const legend = slices.map((s, i) => {
+        const ly = 14 + i * 19;
+        const lbl = s.name.length > 18 ? s.name.slice(0, 17) + "…" : s.name;
+        return `<rect x="${LEG_X}" y="${ly - 9}" width="10" height="10" rx="2" fill="${s.color}"/>` +
+            `<text x="${LEG_X + 14}" y="${ly}" class="rcd-leg">${escapeHtml(lbl)} (${s.pct}%)</text>`;
+    }).join("");
+    return `<svg viewBox="0 0 ${VW} ${VH}" class="ranking-chart-svg ranking-chart-donut" role="img" aria-label="Donut chart">` +
+        `<defs><style>.rcd-leg{font:11px/1 system-ui,sans-serif;fill:#444}</style></defs>` +
+        `${paths}` +
+        `<circle cx="${CX}" cy="${CY}" r="${RI}" fill="white"/>` +
+        `<text x="${CX}" y="${CY - 5}" text-anchor="middle" style="font:bold 13px system-ui;fill:#333">${total}</text>` +
+        `<text x="${CX}" y="${CY + 11}" text-anchor="middle" style="font:10px system-ui;fill:#888">total</text>` +
+        `${legend}</svg>`;
+}
+
+function renderRankingSectionContent(rankingKey, items, countLabel, emptyMessage) {
+    if (!Array.isArray(items) || !items.length) {
+        const msg = emptyMessage
+            || (rankingKey === "targeted_organizations"
+                ? "Not enough organization data in preview fields."
+                : "Field not present in GTI Intelligence Search preview for this sample");
+        return `<p><em>${escapeHtml(msg)}</em></p>`;
+    }
+    const chartHtml = rankingKey === "collection_type" ? renderDonutChartSvg(items, 8) : "";
+    return (chartHtml ? `<div class="ranking-viz">${chartHtml}</div>` : "") + renderRankingTable(items, countLabel);
+}
+
 function normalizeTopTargetsResponse(responseData, requestedRankings = []) {
     const normalized = { ...responseData };
     const rankings = (
@@ -1691,15 +1795,10 @@ function renderSelectedRankingSections(responseData) {
     return selectedRankings.map((rankingKey) => {
         const label = TOP_TARGETS_RANKING_LABELS[rankingKey] || rankingKey;
         const items = rankings[rankingKey] || [];
-        const countLabel = rankingKey === "timeline" ? "collections" : "collections";
-        const emptyHtml = rankingKey === "targeted_organizations"
+        const bodyHtml = rankingKey === "targeted_organizations" && responseData.top_companies_status === "not enough data"
             ? "<p><em>Not enough organization data in preview fields.</em></p>"
-            : renderRankingTable(items, countLabel);
-        const tableHtml = rankingKey === "targeted_organizations" && responseData.top_companies_status === "not enough data"
-            ? emptyHtml
-            : renderRankingTable(items, countLabel);
-
-        return renderSectionCard(label, tableHtml);
+            : renderRankingSectionContent(rankingKey, items, "collections");
+        return renderSectionCard(label, bodyHtml);
     }).join("");
 }
 
@@ -1898,12 +1997,12 @@ function renderTtpSections(responseData) {
         && responseData.top_subtechniques.length > 0
             ? renderSectionCard(
                 "Top MITRE Subtechniques",
-                renderRankingTable(responseData.top_subtechniques || [], "collections"),
+                renderRankingSectionContent("top_subtechniques", responseData.top_subtechniques, "collections"),
             )
             : "";
     return `
-        ${renderSectionCard("Top MITRE Tactics", renderRankingTable(responseData.top_tactics || [], "collections", "No MITRE tactics were extracted."))}
-        ${renderSectionCard("Top MITRE Techniques", renderRankingTable(responseData.top_techniques || [], "collections", "No MITRE techniques were extracted."))}
+        ${renderSectionCard("Top MITRE Tactics", renderRankingSectionContent("top_tactics", responseData.top_tactics || [], "collections", "No MITRE tactics were extracted."))}
+        ${renderSectionCard("Top MITRE Techniques", renderRankingSectionContent("top_techniques", responseData.top_techniques || [], "collections", "No MITRE techniques were extracted."))}
         ${subtechniquesHtml}
     `;
 }
@@ -1976,14 +2075,14 @@ function renderLiveRankingsFromTopTargets(responseData) {
         : Object.keys(rankings);
 
     industriesChartEl.innerHTML = selectedRankings.includes("targeted_industries")
-        ? renderRankingTable(rankings.targeted_industries || [], "collections")
+        ? renderRankingSectionContent("targeted_industries", rankings.targeted_industries || [], "collections")
         : "<p><em>No industries ranking is available for this run.</em></p>";
 
     companiesChartEl.innerHTML = !selectedRankings.includes("targeted_organizations")
         ? "<p><em>No organizations ranking is available for this run.</em></p>"
         : responseData.top_companies_status === "not enough data"
             ? "<p><em>Not enough organization data in preview fields.</em></p>"
-            : renderRankingTable(rankings.targeted_organizations || [], "collections");
+            : renderRankingSectionContent("targeted_organizations", rankings.targeted_organizations || [], "collections");
     companiesSourceBadgeEl.innerHTML = '<span class="badge source-badge">preview-only</span>';
 }
 
@@ -2282,6 +2381,433 @@ function renderDtmDashboard(responseData) {
     `;
 }
 
+function buildIocStreamParams() {
+    const params = new URLSearchParams();
+    params.set("limit", String(Number(iocStreamLimitField?.value || 40)));
+    params.set("entity_type", iocStreamEntityTypeField?.value || "all");
+    params.set("origin", iocStreamOriginField?.value || "all");
+    params.set("enrich", iocStreamEnrichField?.checked ? "true" : "false");
+    params.set("descriptors_only", iocStreamDescriptorsOnlyField?.checked ? "true" : "false");
+    const startDate = iocStreamStartDateField?.value || "";
+    const endDate = iocStreamEndDateField?.value || "";
+    if (startDate) params.set("start_date", startDate);
+    if (endDate) params.set("end_date", endDate);
+    return params;
+}
+
+function normalizeChartRows(rows) {
+    return Array.isArray(rows)
+        ? rows.map((row) => ({
+            label: String(row.label || "Unknown"),
+            value: Number(row.value || 0),
+        })).filter((row) => row.value > 0)
+        : [];
+}
+
+function renderIocStreamDonutChart(rows, title) {
+    const data = normalizeChartRows(rows);
+    const total = data.reduce((sum, row) => sum + row.value, 0);
+    if (!data.length || total <= 0) {
+        return `<div class="ioc-chart-empty">No chart data.</div>`;
+    }
+
+    const cx = 72;
+    const cy = 72;
+    const outerRadius = 58;
+    const innerRadius = 35;
+    let angle = -Math.PI / 2;
+    const slices = data.map((row, index) => {
+        const fraction = row.value / total;
+        const sweep = fraction * Math.PI * 2;
+        const startAngle = angle;
+        const endAngle = angle + sweep;
+        angle = endAngle;
+        const color = CHART_PALETTE[index % CHART_PALETTE.length];
+        const largeArc = sweep > Math.PI ? 1 : 0;
+
+        if (data.length === 1) {
+            return `<circle cx="${cx}" cy="${cy}" r="${outerRadius}" fill="${color}"></circle>`;
+        }
+
+        const x1o = cx + outerRadius * Math.cos(startAngle);
+        const y1o = cy + outerRadius * Math.sin(startAngle);
+        const x2o = cx + outerRadius * Math.cos(endAngle);
+        const y2o = cy + outerRadius * Math.sin(endAngle);
+        const x1i = cx + innerRadius * Math.cos(startAngle);
+        const y1i = cy + innerRadius * Math.sin(startAngle);
+        const x2i = cx + innerRadius * Math.cos(endAngle);
+        const y2i = cy + innerRadius * Math.sin(endAngle);
+        return `
+            <path
+                d="M ${x1i} ${y1i} L ${x1o} ${y1o} A ${outerRadius} ${outerRadius} 0 ${largeArc} 1 ${x2o} ${y2o} L ${x2i} ${y2i} A ${innerRadius} ${innerRadius} 0 ${largeArc} 0 ${x1i} ${y1i} Z"
+                fill="${color}"
+            ></path>
+        `;
+    }).join("");
+
+    const legend = data.map((row, index) => {
+        const percent = Math.round((row.value / total) * 100);
+        return `
+            <li>
+                <span class="ioc-chart-swatch" style="background:${CHART_PALETTE[index % CHART_PALETTE.length]}"></span>
+                <span>${escapeHtml(row.label)}</span>
+                <strong>${escapeHtml(String(row.value))} (${percent}%)</strong>
+            </li>
+        `;
+    }).join("");
+
+    return `
+        <div class="ioc-donut-chart" role="img" aria-label="${escapeHtml(title)}">
+            <svg viewBox="0 0 144 144" aria-hidden="true">
+                ${slices}
+                <circle cx="${cx}" cy="${cy}" r="${innerRadius}" fill="white"></circle>
+                <text x="${cx}" y="${cy - 3}" text-anchor="middle" class="ioc-donut-total">${escapeHtml(String(total))}</text>
+                <text x="${cx}" y="${cy + 13}" text-anchor="middle" class="ioc-donut-label">IoCs</text>
+            </svg>
+            <ul class="ioc-chart-legend">${legend}</ul>
+        </div>
+    `;
+}
+
+function renderIocStreamBarChart(rows) {
+    const data = normalizeChartRows(rows);
+    if (!data.length) {
+        return `<div class="ioc-chart-empty">No chart data.</div>`;
+    }
+    const maxValue = Math.max(...data.map((row) => row.value), 1);
+    return `
+        <div class="ioc-bar-chart">
+            ${data.map((row) => {
+                const width = Math.max(4, Math.round((row.value / maxValue) * 100));
+                return `
+                    <div class="ioc-bar-row">
+                        <span>${escapeHtml(row.label)}</span>
+                        <div class="ioc-bar-track"><div class="ioc-bar-fill" style="width:${width}%"></div></div>
+                        <strong>${escapeHtml(String(row.value))}</strong>
+                    </div>
+                `;
+            }).join("")}
+        </div>
+    `;
+}
+
+function SummaryCards(summary) {
+    const cards = [
+        ["Total IoCs", summary.total_iocs ?? 0, "returned"],
+        ["High Risk", summary.high_risk ?? 0, "urgent"],
+        ["Medium Risk", summary.medium_risk ?? 0, "review"],
+        ["Main IoC Type", summary.main_entity_type || "Unknown", "dominant"],
+        ["Main Source Type", summary.main_source_type || "Unknown", "dominant"],
+    ];
+    return `
+        <div class="kpi-grid ioc-summary-grid">
+            ${cards.map(([label, value, hint]) => `
+                <div class="kpi-card">
+                    <span>${escapeHtml(String(label))}</span>
+                    <strong>${escapeHtml(String(value))}</strong>
+                    <small>${escapeHtml(String(hint))}</small>
+                </div>
+            `).join("")}
+        </div>
+    `;
+}
+
+function IocStreamCharts(charts) {
+    const chartData = charts || {};
+    return `
+        <div class="stats-charts-grid ioc-chart-grid">
+            <section class="stats-chart-panel report-section-card">
+                <h2 class="stats-chart-title">IoCs by Entity Type</h2>
+                ${renderIocStreamDonutChart(chartData.by_entity_type, "IoCs by entity type")}
+            </section>
+            <section class="stats-chart-panel report-section-card">
+                <h2 class="stats-chart-title">IoCs by Risk</h2>
+                ${renderIocStreamBarChart(chartData.by_risk)}
+            </section>
+            <section class="stats-chart-panel report-section-card">
+                <h2 class="stats-chart-title">Recommended Actions</h2>
+                ${renderIocStreamDonutChart(chartData.by_recommended_action, "Recommended actions")}
+            </section>
+            <section class="stats-chart-panel report-section-card">
+                <h2 class="stats-chart-title">Source Type Distribution</h2>
+                ${renderIocStreamBarChart(chartData.by_source_type)}
+            </section>
+        </div>
+    `;
+}
+
+function IocStreamEnrichmentStatus(technicalDetails) {
+    const enrichment = technicalDetails?.enrichment || {};
+    const enabled = Boolean(enrichment.enabled);
+    const cards = [
+        ["Enrichment", enabled ? "Enabled" : "Disabled"],
+        ["Attempted", enrichment.attempted ?? 0],
+        ["Succeeded", enrichment.succeeded ?? 0],
+        ["Errors", enrichment.errors ?? 0],
+    ];
+    return `
+        <section class="report-section-card">
+            <h2>Enrichment Status</h2>
+            <div class="mini-metric-grid">
+                ${cards.map(([label, value]) => `
+                    <div class="mini-metric">
+                        <span>${escapeHtml(String(label))}</span>
+                        <strong>${escapeHtml(String(value))}</strong>
+                    </div>
+                `).join("")}
+            </div>
+            <p class="compact-note">Risk is Unknown unless GTI Stream provides a score/verdict or enrichment is enabled. Unknown does not mean safe.</p>
+        </section>
+    `;
+}
+
+function IocStreamDateFilterNotice(technicalDetails) {
+    const dateFiltering = technicalDetails?.date_filtering || {};
+    if (!dateFiltering.start_date && !dateFiltering.end_date) {
+        return "";
+    }
+    return `
+        <section class="report-section-card">
+            <h2>Date Filters</h2>
+            <p><strong>Selected start:</strong> ${escapeHtml(String(dateFiltering.start_date || "none"))}</p>
+            <p><strong>Selected end:</strong> ${escapeHtml(String(dateFiltering.end_date || "none"))}</p>
+            <p class="compact-note">${escapeHtml(String(dateFiltering.note || "Local post-filtering not yet implemented."))}</p>
+        </section>
+    `;
+}
+
+function renderRiskBadge(risk) {
+    const normalizedRisk = String(risk || "Unknown");
+    return `<span class="risk-badge risk-${escapeHtml(normalizedRisk.toLowerCase())}">${escapeHtml(normalizedRisk)}</span>`;
+}
+
+function TopIndicatorsTable(indicators) {
+    const rows = Array.isArray(indicators) ? indicators.slice(0, 10) : [];
+    if (!rows.length) {
+        return `<p><em>No IoC Stream notifications were returned for the selected filters.</em></p>`;
+    }
+    return `
+        <div class="table-scroll">
+            <table class="ranking-table monitor-table">
+                <thead>
+                    <tr>
+                        <th>Indicator</th>
+                        <th>Type</th>
+                        <th>Risk</th>
+                        <th>Enrichment</th>
+                        <th>Source</th>
+                        <th>Recommended action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.map((item) => `
+                        <tr class="ranking-row">
+                            <td class="name-cell"><strong>${escapeHtml(String(item.value || "Unknown"))}</strong></td>
+                            <td class="count-cell">${escapeHtml(String(item.entity_type || "Unknown"))}</td>
+                            <td class="count-cell">${renderRiskBadge(item.severity)}</td>
+                            <td class="count-cell">${renderIocEnrichmentCell(item)}</td>
+                            <td class="name-cell">
+                                ${escapeHtml(String(item.source_name || "Unknown"))}
+                                <small>${escapeHtml(String(item.source_type || "Unknown"))}</small>
+                            </td>
+                            <td class="count-cell">${escapeHtml(String(item.recommended_action || "Manual review"))}</td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function renderIocEnrichmentCell(item) {
+    const status = String(item.enrichment_status || "not_requested");
+    if (status !== "success") {
+        return `<span class="enrichment-status">${escapeHtml(status.replaceAll("_", " "))}</span>`;
+    }
+    const malicious = item.malicious ?? 0;
+    const suspicious = item.suspicious ?? 0;
+    const reputation = item.reputation ?? "n/a";
+    return `
+        <span class="enrichment-status success">M:${escapeHtml(String(malicious))} S:${escapeHtml(String(suspicious))}</span>
+        <small>rep ${escapeHtml(String(reputation))}</small>
+    `;
+}
+
+function DefinitionsPanel(definitions) {
+    const rows = Array.isArray(definitions) ? definitions : [];
+    return `
+        <details class="definitions-panel">
+            <summary>Definitions</summary>
+            <div class="definition-list">
+                ${rows.map((item) => `
+                    <div>
+                        <strong>${escapeHtml(String(item.term || ""))}</strong>
+                        <p>${escapeHtml(String(item.definition || ""))}</p>
+                    </div>
+                `).join("")}
+            </div>
+        </details>
+    `;
+}
+
+function IocStreamReportPage(responseData) {
+    const summary = responseData.summary || {};
+    const businessSummary = Array.isArray(responseData.business_summary)
+        ? responseData.business_summary
+        : [];
+    const noDataMessage = Number(summary.total_iocs || 0) === 0
+        ? `<p class="diagnostic-warning compact">No IoC Stream notifications were returned for the selected filters.</p>`
+        : "";
+    const enrichment = responseData.technical_details?.enrichment || {};
+    const enrichmentNote = enrichment.enabled
+        ? `Enrichment enabled: ${Number(enrichment.succeeded || 0)} / ${Number(enrichment.attempted || 0)} indicator lookup(s) succeeded.`
+        : "Enrichment disabled. Enable it to enrich the top 10 returned indicators with read-only VT/GTI lookups.";
+
+    return `
+        <div class="report-document ioc-stream-document">
+            <h1>IoC Stream Report</h1>
+            <p class="compact-note">Generated from recent GTI IoC Stream notifications. This module is read-only. ${escapeHtml(enrichmentNote)}</p>
+            <p class="diagnostic-warning compact">Risk is Unknown unless GTI Stream provides a score/verdict or enrichment is enabled. Unknown indicators are not treated as safe.</p>
+            ${noDataMessage}
+            ${SummaryCards(summary)}
+            ${IocStreamEnrichmentStatus(responseData.technical_details || {})}
+            ${IocStreamDateFilterNotice(responseData.technical_details || {})}
+            ${IocStreamCharts(responseData.charts || {})}
+            <section class="report-section-card">
+                <h2>Business Interpretation</h2>
+                <ul>${businessSummary.map((sentence) => `<li>${escapeHtml(String(sentence))}</li>`).join("")}</ul>
+            </section>
+            <section class="report-section-card">
+                <h2>Top Indicators Requiring Attention</h2>
+                ${TopIndicatorsTable(responseData.top_indicators)}
+            </section>
+            ${DefinitionsPanel(responseData.definitions)}
+            <details class="inline-raw-json">
+                <summary>Technical details</summary>
+                <pre>${escapeHtml(JSON.stringify(responseData.technical_details || {}, null, 2))}</pre>
+            </details>
+        </div>
+    `;
+}
+
+function renderIocStreamReport(responseData) {
+    const html = IocStreamReportPage(responseData);
+    iocStreamOutput.classList.remove("empty-state");
+    iocStreamOutput.innerHTML = html;
+    reportOutput.classList.remove("empty-state");
+    reportOutput.innerHTML = `
+        <h1>IoC Stream Report</h1>
+        ${SummaryCards(responseData.summary || {})}
+        <p>${escapeHtml(String(responseData.message || "IoC Stream report generated."))}</p>
+        <button type="button" class="link-button" data-switch-tab="ioc-stream">Open IoC Stream Report tab</button>
+    `;
+}
+
+async function exportIocStreamDocx() {
+    if (!lastIocStreamResponse) {
+        showMessage("Generate an IoC Stream report before exporting a Word report.", "error");
+        return;
+    }
+
+    setIocStreamDocxState(true, true);
+    updateStatus("Exporting", "running");
+    clearMessage();
+
+    try {
+        const payload = { ioc_stream_report: { ...lastIocStreamResponse } };
+        const response = await fetch("/export/ioc-stream-docx", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+            let detail = "Word export failed.";
+            try {
+                const errorPayload = await response.json();
+                detail = errorPayload.detail || detail;
+            } catch (_) {
+                // Keep the generic message when the backend returned a non-JSON error.
+            }
+            throw new Error(detail);
+        }
+
+        const reportBlob = await response.blob();
+        const contentDisposition = response.headers.get("content-disposition") || "";
+        const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+        const filename = filenameMatch?.[1] || "gti-ioc-stream-report.docx";
+        const downloadUrl = URL.createObjectURL(reportBlob);
+        const downloadLink = document.createElement("a");
+        downloadLink.href = downloadUrl;
+        downloadLink.download = filename;
+        document.body.append(downloadLink);
+        downloadLink.click();
+        downloadLink.remove();
+        URL.revokeObjectURL(downloadUrl);
+
+        updateStatus("Success", "success");
+        showMessage("Word report exported.", "success");
+    } catch (error) {
+        updateStatus("Error", "error");
+        showMessage(error.message || "Word export failed.", "error");
+    } finally {
+        setIocStreamDocxState(Boolean(lastIocStreamResponse), false);
+    }
+}
+
+async function runIocStreamReport() {
+    if (!reportForm.reportValidity()) {
+        return;
+    }
+
+    clearMessage();
+    setIocStreamLoadingState(true);
+    setIocStreamDocxState(false);
+    setDownloadState(false);
+    lastGeneratedReport = "";
+
+    try {
+        const apiKey = apiKeyField.value.trim();
+        const response = await fetch(`/api/ioc-stream/report?${buildIocStreamParams()}`, {
+            headers: { "x-api-key": apiKey },
+        });
+        const responseData = await response.json();
+        if (!response.ok) {
+            throw new Error(responseData.detail || "The backend returned an error.");
+        }
+
+        lastIocStreamResponse = responseData;
+        renderIocStreamReport(responseData);
+        setIocStreamDocxState(true);
+        switchToTab("ioc-stream");
+        rawJsonOutput.textContent = JSON.stringify(responseData, null, 2);
+
+        updateStatus("Success", "success");
+        showMessage(
+            responseData.message || `IoC Stream report generated with ${formatInteger(responseData.summary?.total_iocs)} indicator(s).`,
+            "success",
+        );
+    } catch (error) {
+        lastIocStreamResponse = null;
+        iocStreamOutput.classList.add("empty-state");
+        iocStreamOutput.innerHTML = `
+            <h3>IoC Stream report failed</h3>
+            <p>${escapeHtml(error.message || "Unknown error.")}</p>
+        `;
+        reportOutput.classList.add("empty-state");
+        reportOutput.innerHTML = iocStreamOutput.innerHTML;
+        rawJsonOutput.textContent = "No valid JSON payload was returned.";
+        updateStatus("Error", "error");
+        showMessage(error.message || "IoC Stream report failed.", "error");
+    } finally {
+        setIocStreamLoadingState(false);
+
+        if (!statusPill.classList.contains("success") && !statusPill.classList.contains("error")) {
+            updateStatus("Idle", "idle");
+        }
+    }
+}
+
 async function runDtmDashboard() {
     clearMessage();
     setDtmDashboardLoadingState(true);
@@ -2489,6 +3015,11 @@ async function generateReport(event) {
         return;
     }
 
+    if (reportTypeField.value === IOC_STREAM_REPORT) {
+        await runIocStreamReport();
+        return;
+    }
+
     if (reportTypeField.value === GTI_INTELLIGENCE_SEARCH) {
         await searchGtiIntelligence();
         return;
@@ -2616,6 +3147,8 @@ explorerButton.addEventListener("click", runSelectedExplorer);
 dtmMonitorsButton.addEventListener("click", testDtmMonitors);
 dtmAlertsButton.addEventListener("click", testDtmAlerts);
 dtmDashboardButton?.addEventListener("click", runDtmDashboard);
+iocStreamButton?.addEventListener("click", runIocStreamReport);
+iocStreamDocxButton?.addEventListener("click", exportIocStreamDocx);
 intelligenceSearchButton.addEventListener("click", searchGtiIntelligence);
 topTargetsButton?.addEventListener("click", runTopTargetsRanking);
 topTargetsDocxButton?.addEventListener("click", exportTopRankingDocx);
@@ -2657,6 +3190,7 @@ dtmDashboardOutput?.addEventListener("click", (event) => {
 });
 crossAnalysisOutput?.addEventListener("click", handleReportOutputClick);
 diagnosticsOutput?.addEventListener("click", handleReportOutputClick);
+iocStreamOutput?.addEventListener("click", handleReportOutputClick);
 copyJsonButton?.addEventListener("click", copyRawJsonToClipboard);
 reportForm.addEventListener("submit", generateReport);
 setDownloadState(false);
