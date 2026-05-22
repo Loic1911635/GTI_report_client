@@ -2379,7 +2379,7 @@ function renderDtmDashboard(responseData) {
 
 function buildIocStreamParams() {
     const params = new URLSearchParams();
-    params.set("pages_to_fetch", String(Number(iocStreamPagesToFetchField?.value || 5)));
+    params.set("max_pages", String(Number(iocStreamPagesToFetchField?.value || 5)));
     params.set("entity_type", iocStreamEntityTypeField?.value || "all");
     params.set("origin", iocStreamOriginField?.value || "all");
     params.set("enrich", "true");
@@ -2530,6 +2530,7 @@ function RecentExposureCollectionSummary(responseData) {
     const cards = [
         ["Requested Pages", collection.requested_pages ?? responseData.technical_details?.request_params?.pages_to_fetch ?? "n/a", "input"],
         ["Pages Fetched", collection.pages_fetched ?? responseData.summary?.pages_fetched ?? 0, "GTI pages"],
+        ["Page Size", collection.page_size ?? responseData.summary?.page_size ?? "n/a", "API limit"],
         ["Raw IoCs Returned", collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0, "before dedupe"],
         ["Unique IoCs", collection.unique_ioc_count ?? responseData.summary?.unique_ioc_count ?? 0, "deduped"],
         ["Duplicates Removed", collection.duplicates_removed ?? responseData.summary?.duplicates_removed ?? 0, "duplicates"],
@@ -2571,6 +2572,7 @@ function RecentExposureCollectionSummary(responseData) {
             <h2>Recent Stream Sample</h2>
             <p><strong>Requested pages:</strong> ${escapeHtml(String(collection.requested_pages ?? responseData.technical_details?.request_params?.pages_to_fetch ?? "n/a"))}</p>
             <p><strong>Pages fetched:</strong> ${escapeHtml(String(collection.pages_fetched ?? responseData.summary?.pages_fetched ?? 0))}</p>
+            <p><strong>Page size:</strong> ${escapeHtml(String(collection.page_size ?? responseData.summary?.page_size ?? "n/a"))}</p>
             <p><strong>Raw IoCs returned:</strong> ${escapeHtml(String(collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0))}</p>
             <p><strong>Unique IoCs after deduplication:</strong> ${escapeHtml(String(collection.unique_ioc_count ?? responseData.summary?.unique_ioc_count ?? 0))}</p>
             <p><strong>Earliest returned timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(earliestTimestamp)))}</p>

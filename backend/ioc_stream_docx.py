@@ -36,6 +36,7 @@ def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> s
     metrics = [
         ("Requested pages", collection.get("requested_pages", "Unknown")),
         ("Pages fetched", collection.get("pages_fetched", 0)),
+        ("Page size", collection.get("page_size", 40)),
         ("Raw IoCs returned", collection.get("raw_ioc_count", summary.get("raw_ioc_count", 0))),
         ("Unique IoCs", collection.get("unique_ioc_count", summary.get("total_iocs", 0))),
         ("Duplicates removed", collection.get("duplicates_removed", 0)),

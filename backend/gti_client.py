@@ -496,7 +496,7 @@ def fetch_ioc_stream(
     requested_pages = max_pages if max_pages is not None else pages_to_fetch
     if requested_pages not in IOC_STREAM_ALLOWED_PAGES_TO_FETCH:
         raise ValueError(
-            "The IoC Stream pages_to_fetch value must be one of: 1, 2, 5, 10."
+            "The IoC Stream max_pages/pages_to_fetch value must be one of: 1, 2, 5, 10."
         )
     if limit is not None and limit < 1:
         raise ValueError("The IoC Stream compatibility limit must be at least 1.")
@@ -517,6 +517,7 @@ def fetch_ioc_stream(
     request_params: dict[str, Any] = {
         **base_params,
         "pages_to_fetch": normalized_pages_to_fetch,
+        "max_pages": normalized_pages_to_fetch,
         "api_page_limit": IOC_STREAM_API_PAGE_LIMIT,
     }
     if limit is not None:
@@ -1005,6 +1006,7 @@ def build_ioc_stream_report(
         "main_entity_type": main_entity_type,
         "main_source_type": main_source_type,
         "pages_fetched": collection_metadata.get("pages_fetched", 0),
+        "page_size": collection_metadata.get("page_size", IOC_STREAM_API_PAGE_LIMIT),
         "total_enriched": enrichment_succeeded,
         "raw_ioc_count": len(raw_indicators),
         "unique_ioc_count": len(indicators),

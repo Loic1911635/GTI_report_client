@@ -170,7 +170,7 @@ class IocStreamReportTests(unittest.TestCase):
             entity_type="domain",
             origin="hunting",
             descriptors_only=True,
-            pages_to_fetch=2,
+            max_pages=2,
         )
 
         self.assertEqual(result["status_code"], 200)
@@ -180,7 +180,9 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(params["descriptors_only"], "true")
         self.assertEqual(params["order"], "date")
         self.assertEqual(result["request_params"]["pages_to_fetch"], 2)
+        self.assertEqual(result["request_params"]["max_pages"], 2)
         self.assertEqual(result["request_params"]["api_page_limit"], 40)
+        self.assertEqual(result["collection"]["page_size"], 40)
         self.assertNotIn("date", params.get("filter", ""))
 
     @patch("backend.gti_client._probe_json_endpoint")
@@ -504,6 +506,45 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(report["technical_details"]["enrichment"]["succeeded"], 12)
         self.assertEqual(report["technical_details"]["enrichment"]["requested_limit"], 12)
         self.assertEqual(report["technical_details"]["enrichment"]["actual_limit"], 12)
+
+    def test_build_ioc_stream_report_exposes_sample_collection_metrics(self) -> None:
+        stream_result = {
+            "status_code": 200,
+            "collection": {
+                "requested_pages": 5,
+                "pages_fetched": 2,
+                "page_size": 40,
+                "raw_ioc_count": 3,
+                "stopped_reason": "no_more_pages",
+                "earliest_timestamp": "2026-05-20T10:00:00+00:00",
+                "latest_timestamp": "2026-05-21T10:00:00+00:00",
+            },
+            "raw_data": {
+                "data": [
+                    {"id": "duplicate.example", "type": "domain", "attributes": {}},
+                    {"id": "duplicate.example", "type": "domain", "attributes": {}},
+                    {"id": "unique.example", "type": "domain", "attributes": {}},
+                ]
+            },
+        }
+
+        report = gti_client.build_ioc_stream_report(stream_result)
+
+        self.assertEqual(report["collection"]["requested_pages"], 5)
+        self.assertEqual(report["collection"]["pages_fetched"], 2)
+        self.assertEqual(report["collection"]["page_size"], 40)
+        self.assertEqual(report["collection"]["raw_ioc_count"], 3)
+        self.assertEqual(report["collection"]["unique_ioc_count"], 2)
+        self.assertEqual(report["collection"]["duplicates_removed"], 1)
+        self.assertEqual(report["collection"]["stopped_reason"], "no_more_pages")
+        self.assertEqual(
+            report["collection"]["earliest_timestamp"],
+            "2026-05-20T10:00:00+00:00",
+        )
+        self.assertEqual(
+            report["collection"]["latest_timestamp"],
+            "2026-05-21T10:00:00+00:00",
+        )
 
     @patch("backend.gti_client.enrich_ioc_indicator")
     def test_build_ioc_stream_report_uses_requested_enrichment_limit(self, mock_enrich) -> None:
