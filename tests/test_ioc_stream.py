@@ -1,5 +1,6 @@
 import unittest
 import base64
+import json
 from unittest.mock import patch
 
 from backend import gti_client
@@ -239,6 +240,261 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(result["collection"]["earliest_timestamp"], "2026-05-13T10:00:00+00:00")
 
     @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_time_window_filters_after_fetching_complete_coverage(
+        self,
+        mock_probe,
+    ) -> None:
+        def page(start: int, dates: list[str], next_cursor: str | None = None) -> dict:
+            payload = {
+                "data": [
+                    {
+                        "id": f"example-{index}.com",
+                        "type": "domain",
+                        "attributes": {"matched_date": matched_date},
+                    }
+                    for index, matched_date in enumerate(dates, start=start)
+                ]
+            }
+            if next_cursor:
+                payload["meta"] = {"next_cursor": next_cursor}
+            return {"http_status": 200, "response_headers": {}, "raw_json": payload}
+
+        mock_probe.side_effect = [
+            page(0, ["2026-05-21T10:00:00Z", "2026-05-20T10:00:00Z"], "cursor-1"),
+            page(40, ["2026-05-19T10:00:00Z", "2026-05-18T10:00:00Z"], "cursor-2"),
+            page(80, ["2026-05-13T10:00:00Z"]),
+        ]
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="time_window",
+            time_window="custom",
+            start_date="2026-05-14",
+            end_date="2026-05-21",
+            max_pages=5,
+        )
+
+        self.assertEqual(mock_probe.call_count, 3)
+        self.assertEqual(result["total_collected"], 4)
+        self.assertEqual(len(result["raw_data"]["data"]), 4)
+        self.assertEqual(result["collection"]["raw_ioc_count"], 5)
+        self.assertEqual(result["collection"]["iocs_inside_window"], 4)
+        self.assertEqual(result["collection"]["coverage_status"], "complete")
+        self.assertEqual(result["collection"]["stopped_reason"], "start_date_reached")
+        self.assertEqual(
+            result["collection"]["earliest_fetched_timestamp"],
+            "2026-05-13T10:00:00+00:00",
+        )
+        self.assertEqual(
+            result["collection"]["earliest_kept_timestamp"],
+            "2026-05-18T10:00:00+00:00",
+        )
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_time_window_marks_partial_when_max_pages_reached(
+        self,
+        mock_probe,
+    ) -> None:
+        def page(identifier: str, matched_date: str, cursor: str | None = None) -> dict:
+            payload = {
+                "data": [
+                    {
+                        "id": identifier,
+                        "type": "domain",
+                        "attributes": {"matched_date": matched_date},
+                    }
+                ]
+            }
+            if cursor:
+                payload["meta"] = {"next_cursor": cursor}
+            return {"http_status": 200, "response_headers": {}, "raw_json": payload}
+
+        mock_probe.side_effect = [
+            page("one.example", "2026-05-21T10:00:00Z", "cursor-1"),
+            page("two.example", "2026-05-20T10:00:00Z", "cursor-2"),
+        ]
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="time_window",
+            time_window="custom",
+            start_date="2026-05-14",
+            end_date="2026-05-21",
+            max_pages=2,
+        )
+
+        self.assertEqual(result["collection"]["stopped_reason"], "max_pages_reached")
+        self.assertEqual(result["collection"]["coverage_status"], "partial")
+        self.assertEqual(result["collection"]["raw_ioc_count"], 2)
+        self.assertEqual(result["collection"]["iocs_inside_window"], 2)
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_time_window_marks_no_more_pages_before_start(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.return_value = {
+            "http_status": 200,
+            "response_headers": {},
+            "raw_json": {
+                "data": [
+                    {
+                        "id": "one.example",
+                        "type": "domain",
+                        "attributes": {"matched_date": "2026-05-21T10:00:00Z"},
+                    }
+                ]
+            },
+        }
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="time_window",
+            time_window="custom",
+            start_date="2026-05-14",
+            end_date="2026-05-21",
+            max_pages=5,
+        )
+
+        self.assertEqual(result["collection"]["stopped_reason"], "no_more_pages")
+        self.assertEqual(result["collection"]["coverage_status"], "no_more_pages")
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_time_window_ignores_old_object_metadata_for_stop(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.side_effect = [
+            {
+                "http_status": 200,
+                "response_headers": {},
+                "raw_json": {
+                    "data": [
+                        {
+                            "id": "one.example",
+                            "type": "domain",
+                            "attributes": {
+                                "matched_date": "2026-05-21T10:00:00Z",
+                                "creation_date": "2001-01-01T00:00:00Z",
+                            },
+                        }
+                    ],
+                    "meta": {"next_cursor": "cursor-1"},
+                },
+            },
+            {
+                "http_status": 200,
+                "response_headers": {},
+                "raw_json": {
+                    "data": [
+                        {
+                            "id": "two.example",
+                            "type": "domain",
+                            "attributes": {
+                                "matched_date": "2026-05-20T10:00:00Z",
+                                "first_seen": "2004-01-01T00:00:00Z",
+                            },
+                        }
+                    ]
+                },
+            },
+        ]
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="time_window",
+            time_window="custom",
+            start_date="2026-05-14",
+            end_date="2026-05-21",
+            max_pages=5,
+        )
+
+        self.assertEqual(mock_probe.call_count, 2)
+        self.assertEqual(result["collection"]["stopped_reason"], "no_more_pages")
+        self.assertEqual(result["collection"]["coverage_status"], "no_more_pages")
+        self.assertEqual(result["collection"]["raw_ioc_count"], 2)
+        self.assertEqual(result["collection"]["iocs_inside_window"], 2)
+        self.assertEqual(
+            result["collection"]["oldest_stream_event_timestamp"],
+            "2026-05-20T10:00:00+00:00",
+        )
+        self.assertEqual(
+            result["collection"]["oldest_object_metadata_timestamp"],
+            "2001-01-01T00:00:00+00:00",
+        )
+        self.assertEqual(
+            result["collection"]["ignored_object_metadata_old_timestamp_count"],
+            2,
+        )
+        self.assertEqual(result["collection"]["stop_timestamp_field"], None)
+        self.assertIn("matched_date", result["collection"]["timestamp_fields_seen"])
+        self.assertIn("creation_date", result["collection"]["timestamp_fields_seen"])
+        self.assertIn("first_seen", result["collection"]["timestamp_fields_seen"])
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_time_window_without_stream_timestamps_is_unknown(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.return_value = {
+            "http_status": 200,
+            "response_headers": {},
+            "raw_json": {
+                "data": [
+                    {
+                        "id": "old-object.example",
+                        "type": "domain",
+                        "attributes": {
+                            "creation_date": "2001-01-01T00:00:00Z",
+                            "first_submission_date": "2004-01-01T00:00:00Z",
+                        },
+                    }
+                ]
+            },
+        }
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="time_window",
+            time_window="custom",
+            start_date="2026-05-14",
+            end_date="2026-05-21",
+            max_pages=5,
+        )
+
+        self.assertEqual(result["collection"]["stopped_reason"], "no_more_pages")
+        self.assertEqual(result["collection"]["coverage_status"], "unknown")
+        self.assertEqual(result["collection"]["raw_ioc_count"], 1)
+        self.assertEqual(result["collection"]["iocs_inside_window"], 0)
+        self.assertEqual(result["collection"]["items_without_stream_timestamp_count"], 1)
+        self.assertEqual(
+            result["collection"]["oldest_object_metadata_timestamp"],
+            "2001-01-01T00:00:00+00:00",
+        )
+
+    def test_stream_event_datetime_keeps_object_created_at_separate(self) -> None:
+        object_item = {
+            "id": "object-created.example",
+            "type": "domain",
+            "attributes": {"created_at": "2001-01-01T00:00:00Z"},
+        }
+        notification_item = {
+            "id": "stream-created.example",
+            "type": "ioc_stream_notification",
+            "attributes": {"created_at": "2026-05-21T10:00:00Z"},
+        }
+
+        self.assertIsNone(gti_client.extract_stream_event_datetime(object_item))
+        self.assertEqual(
+            gti_client.extract_object_metadata_datetime(object_item).isoformat(),
+            "2001-01-01T00:00:00+00:00",
+        )
+        self.assertEqual(
+            gti_client.extract_stream_event_datetime(notification_item).isoformat(),
+            "2026-05-21T10:00:00+00:00",
+        )
+
+    @patch("backend.gti_client._probe_json_endpoint")
     def test_fetch_ioc_stream_follows_unquoted_link_header(self, mock_probe) -> None:
         mock_probe.side_effect = [
             {
@@ -409,6 +665,56 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(result["total_collected"], 2)
 
     @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_ignores_full_http_next_cursor_candidate_until_valid_ioc_stream_page(self, mock_probe) -> None:
+        mock_probe.side_effect = [
+            {
+                "http_status": 200,
+                "response_headers": {},
+                "raw_json": {
+                    "data": [
+                        {
+                            "id": "first.example",
+                            "type": "domain",
+                            "attributes": {"matched_date": "2026-05-21T10:00:00Z"},
+                        }
+                    ],
+                    "meta": {
+                        "next": "http://megaplaylive.com/?enc=" + "A" * 1000
+                    },
+                    "links": {
+                        "next": "https://www.virustotal.com/api/v3/ioc_stream?cursor=real-cursor"
+                    },
+                },
+            },
+            {
+                "http_status": 200,
+                "response_headers": {},
+                "raw_json": {
+                    "data": [
+                        {
+                            "id": "second.example",
+                            "type": "domain",
+                            "attributes": {"matched_date": "2026-05-20T10:00:00Z"},
+                        }
+                    ]
+                },
+            },
+        ]
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            pages_to_fetch=2,
+        )
+
+        self.assertEqual(mock_probe.call_count, 2)
+        self.assertEqual(mock_probe.call_args_list[1].kwargs["params"]["cursor"], "real-cursor")
+        self.assertEqual(result["total_collected"], 2)
+        self.assertEqual(result["collection"]["pages_fetched"], 2)
+        self.assertEqual(result["page_diagnostics"][0]["next_cursor_source"], "payload.links.next")
+        self.assertIsNotNone(result["page_diagnostics"][0]["ignored_cursor_reason"])
+        self.assertTrue(result["page_diagnostics"][0]["ignored_cursor_candidate"].startswith("http://megaplaylive.com/"))
+
+    @patch("backend.gti_client._probe_json_endpoint")
     def test_fetch_ioc_stream_continues_to_requested_pages_when_timestamps_are_missing(
         self,
         mock_probe,
@@ -544,6 +850,111 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(
             report["collection"]["latest_timestamp"],
             "2026-05-21T10:00:00+00:00",
+        )
+
+    def test_build_ioc_stream_report_handles_very_long_url_indicator(self) -> None:
+        long_url = "https://example.test/" + "a" * 1200
+        stream_result = {
+            "status_code": 200,
+            "raw_data": {
+                "data": [
+                    {
+                        "id": long_url,
+                        "type": "url",
+                        "attributes": {
+                            "matched_date": "2026-05-21T10:00:00Z",
+                            "gti_score": 85,
+                        },
+                    },
+                    {
+                        "id": long_url,
+                        "type": "url",
+                        "attributes": {
+                            "matched_date": "2026-05-21T10:00:00Z",
+                            "gti_score": 85,
+                        },
+                    },
+                ]
+            },
+        }
+
+        report = gti_client.build_ioc_stream_report(stream_result)
+        json.dumps(report)
+
+        self.assertEqual(report["summary"]["total_iocs"], 1)
+        self.assertEqual(report["collection"]["duplicates_removed"], 1)
+        indicator = report["indicators"][0]
+        self.assertEqual(indicator["value"], long_url)
+        self.assertEqual(len(indicator["display_value"]), 120)
+        self.assertTrue(indicator["display_value"].endswith("..."))
+        self.assertEqual(
+            indicator["ioc_key"],
+            gti_client.stable_ioc_key("url", long_url),
+        )
+        self.assertEqual(len(indicator["ioc_key"]), 64)
+        self.assertNotIn(long_url, report["charts"]["by_entity_type"][0].values())
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_enrich_ioc_indicator_keeps_long_url_when_lookup_errors(
+        self,
+        mock_probe,
+    ) -> None:
+        long_url = "https://example.test/" + "b" * 1200
+        indicator = {
+            "ioc_key": gti_client.stable_ioc_key("url", long_url),
+            "value": long_url,
+            "display_value": gti_client._truncate_ioc_display_value(long_url),
+            "entity_type": "url",
+            "severity": "Unknown",
+            "recommended_action": "Manual review",
+        }
+
+        enriched = gti_client.enrich_ioc_indicator("test-key", indicator)
+
+        mock_probe.assert_not_called()
+        self.assertEqual(enriched["value"], long_url)
+        self.assertEqual(enriched["enrichment_status"], "skipped")
+        self.assertEqual(enriched["enrichment_skip_reason"], "url_too_long")
+        self.assertIn("URL too long", enriched["enrichment_error"])
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_build_ioc_stream_report_skips_very_long_url_enrichment(
+        self,
+        mock_probe,
+    ) -> None:
+        long_url = "https://example.test/" + "c" * 1200
+        stream_result = {
+            "status_code": 200,
+            "raw_data": {
+                "data": [
+                    {
+                        "id": long_url,
+                        "type": "url",
+                        "attributes": {"matched_date": "2026-05-21T10:00:00Z"},
+                    }
+                ]
+            },
+        }
+
+        report = gti_client.build_ioc_stream_report(
+            stream_result,
+            api_key="test-key",
+            enrich=True,
+        )
+
+        mock_probe.assert_not_called()
+        indicator = report["indicators"][0]
+        self.assertEqual(indicator["value"], long_url)
+        self.assertEqual(indicator["enrichment_status"], "skipped")
+        self.assertIn("URL too long", indicator["enrichment_error"])
+        self.assertEqual(report["summary"]["total_iocs"], 1)
+        self.assertEqual(report["technical_details"]["enrichment"]["attempted"], 1)
+        self.assertEqual(report["technical_details"]["enrichment"]["succeeded"], 0)
+        self.assertEqual(report["technical_details"]["enrichment"]["errors"], 0)
+        self.assertEqual(report["technical_details"]["enrichment"]["skipped"], 1)
+        self.assertEqual(
+            report["technical_details"]["enrichment"]["skipped_too_long_url"],
+            1,
         )
 
     @patch("backend.gti_client.enrich_ioc_indicator")

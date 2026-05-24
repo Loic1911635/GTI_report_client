@@ -5,9 +5,10 @@ from __future__ import annotations
 import base64
 import json
 import calendar
+import hashlib
 import re
 from typing import Any
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 import requests
@@ -33,8 +34,31 @@ DEFAULT_IOC_STREAM_LIMIT = 40
 IOC_STREAM_API_PAGE_LIMIT = 40
 MAX_IOC_STREAM_LIMIT = 500
 DEFAULT_IOC_STREAM_PAGES_TO_FETCH = 5
-MAX_IOC_STREAM_PAGES_TO_FETCH = 10
-IOC_STREAM_ALLOWED_PAGES_TO_FETCH = {1, 2, 5, 10}
+MAX_IOC_STREAM_PAGES_TO_FETCH = 50
+MAX_VT_URL_ID_BYTES = 500
+MAX_URL_ENRICHMENT_INPUT_BYTES = 350
+IOC_STREAM_COLLECTION_MODES = {"recent_pages", "time_window"}
+IOC_STREAM_TIME_WINDOWS = {"last_24h", "last_7d", "last_30d", "custom"}
+IOC_STREAM_EVENT_TIMESTAMP_FIELDS = (
+    "matched_date",
+    "notification_date",
+    "last_notification_date",
+)
+IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS = (
+    "creation_date",
+    "first_seen",
+    "first_submission_date",
+    "last_analysis_date",
+    "last_modification_date",
+)
+IOC_STREAM_CREATED_AT_NOTIFICATION_TYPES = {
+    "ioc_stream",
+    "ioc_stream_notification",
+    "ioc_notification",
+    "notification",
+    "stream_notification",
+}
+IOC_STREAM_DISPLAY_VALUE_MAX_LENGTH = 120
 IOC_STREAM_SAMPLE_WARNING = (
     "IoC Stream is chronological. This report summarizes the recent pages returned "
     "by the API, not a guaranteed complete time window."
@@ -266,6 +290,22 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def stable_ioc_key(entity_type: Any, value: Any) -> str:
+    """Return a stable safe identifier for an IoC without exposing the raw value."""
+
+    normalized_entity_type = _normalize_ioc_entity_type(entity_type).strip().casefold()
+    normalized_value = str(value or "").strip().casefold()
+    key_material = f"{normalized_entity_type}:{normalized_value}"
+    return hashlib.sha256(key_material.encode("utf-8")).hexdigest()
+
+
+def _truncate_ioc_display_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if len(text) <= IOC_STREAM_DISPLAY_VALUE_MAX_LENGTH:
+        return text
+    return f"{text[: IOC_STREAM_DISPLAY_VALUE_MAX_LENGTH - 3]}..."
+
+
 def lookup_domain(api_key: str, domain: str) -> dict[str, Any]:
     """Look up a domain with the VirusTotal v3 API and normalize the response."""
 
@@ -472,10 +512,15 @@ def fetch_ioc_stream(
     start_date: str | None = None,
     end_date: str | None = None,
     time_window: str | None = None,
+    collection_mode: str = "recent_pages",
 ) -> dict[str, Any]:
-    """Fetch recent chronological IoC Stream pages without enriching indicators."""
+    """Fetch recent IoC Stream pages or a locally-filtered time window."""
 
     normalized_api_key = api_key.strip()
+    normalized_collection_mode = (collection_mode or "recent_pages").strip().casefold()
+    if normalized_collection_mode not in IOC_STREAM_COLLECTION_MODES:
+        allowed_display = ", ".join(sorted(IOC_STREAM_COLLECTION_MODES))
+        raise ValueError(f"Invalid collection_mode. Allowed values: {allowed_display}.")
     normalized_entity_type = _normalize_ioc_stream_choice(
         entity_type,
         IOC_STREAM_ENTITY_TYPES,
@@ -492,16 +537,24 @@ def fetch_ioc_stream(
         raise ValueError("A GTI/VirusTotal API key is required for IoC Stream.")
     if order and order != "date":
         raise ValueError("The IoC Stream order must be 'date'.")
-    # max_pages is accepted as a legacy alias while the UI moves to pages_to_fetch.
     requested_pages = max_pages if max_pages is not None else pages_to_fetch
-    if requested_pages not in IOC_STREAM_ALLOWED_PAGES_TO_FETCH:
+    if requested_pages < 1 or requested_pages > MAX_IOC_STREAM_PAGES_TO_FETCH:
         raise ValueError(
-            "The IoC Stream max_pages/pages_to_fetch value must be one of: 1, 2, 5, 10."
+            f"The IoC Stream max_pages/pages_to_fetch value must be between 1 and {MAX_IOC_STREAM_PAGES_TO_FETCH}."
         )
     if limit is not None and limit < 1:
         raise ValueError("The IoC Stream compatibility limit must be at least 1.")
 
     normalized_pages_to_fetch = requested_pages
+    time_window_metadata = (
+        _resolve_ioc_stream_time_window(time_window, start_date, end_date)
+        if normalized_collection_mode == "time_window"
+        else None
+    )
+    start_datetime = (
+        time_window_metadata["start_datetime"] if time_window_metadata else None
+    )
+    end_datetime = time_window_metadata["end_datetime"] if time_window_metadata else None
     filters: list[str] = []
     if normalized_entity_type != "all":
         filters.append(f"entity_type:{normalized_entity_type}")
@@ -516,18 +569,17 @@ def fetch_ioc_stream(
         base_params["filter"] = " ".join(filters)
     request_params: dict[str, Any] = {
         **base_params,
+        "collection_mode": normalized_collection_mode,
         "pages_to_fetch": normalized_pages_to_fetch,
         "max_pages": normalized_pages_to_fetch,
         "api_page_limit": IOC_STREAM_API_PAGE_LIMIT,
     }
     if limit is not None:
         request_params["compatibility_limit"] = limit
-    if time_window or start_date or end_date:
-        request_params["ignored_date_filters"] = {
-            "time_window": time_window,
-            "start_date": start_date,
-            "end_date": end_date,
-        }
+    if time_window_metadata:
+        request_params["time_window"] = _public_ioc_time_window_metadata(
+            time_window_metadata
+        )
     if normalized_cursor:
         request_params["cursor"] = normalized_cursor
 
@@ -537,6 +589,8 @@ def fetch_ioc_stream(
             entity_type=normalized_entity_type,
             origin=normalized_origin,
             pages_to_fetch=normalized_pages_to_fetch,
+            collection_mode=normalized_collection_mode,
+            time_window_metadata=time_window_metadata,
         )
         return {
             "status_code": 200,
@@ -545,6 +599,7 @@ def fetch_ioc_stream(
             "raw_data": payload,
             "collection": {
                 **collection_metadata,
+                "collection_mode": normalized_collection_mode,
                 "requested_pages": normalized_pages_to_fetch,
                 "page_size": IOC_STREAM_API_PAGE_LIMIT,
             },
@@ -573,10 +628,14 @@ def fetch_ioc_stream(
                 }
             ],
             "request_params": request_params,
-            "warnings": [IOC_STREAM_SAMPLE_WARNING],
+            "warnings": (
+                [IOC_STREAM_SAMPLE_WARNING]
+                if normalized_collection_mode == "recent_pages"
+                else []
+            ),
         }
 
-    collected_items: list[dict[str, Any]] = []
+    fetched_items: list[dict[str, Any]] = []
     endpoint_results: list[dict[str, Any]] = []
     page_diagnostics: list[dict[str, Any]] = []
     page_payloads: list[Any] = []
@@ -586,6 +645,7 @@ def fetch_ioc_stream(
     final_status_code = 0
     warnings: list[str] = []
     stopped_reason = "requested_pages_reached"
+    stop_timestamp_field: str | None = None
     seen_page_tokens: set[str] = set()
 
     for page_number in range(1, normalized_pages_to_fetch + 1):
@@ -606,6 +666,7 @@ def fetch_ioc_stream(
         final_status_code = int(endpoint_result["http_status"])
 
         if final_status_code != 200:
+            cursor_details = _extract_next_cursor_details(payload)
             page_diagnostics.append(
                 {
                     "page_number": page_number,
@@ -613,33 +674,52 @@ def fetch_ioc_stream(
                     "raw_page_item_count": len(_extract_api_items(payload)),
                     "next_cursor_found": False,
                     "next_link_found": False,
+                    "next_cursor_source": cursor_details["next_cursor_source"],
+                    "ignored_cursor_candidate": cursor_details["ignored_cursor_candidate"],
+                    "ignored_cursor_reason": cursor_details["ignored_cursor_reason"],
                     "request_url": current_url,
                     "request_params": params or {},
                 }
             )
-            return {
-                "status_code": final_status_code,
-                "total_collected": len(collected_items),
-                "next_cursor": None,
-                "raw_data": payload,
-                "endpoint_results": endpoint_results,
-                "page_diagnostics": page_diagnostics,
-                "request_params": request_params,
-                "warnings": [IOC_STREAM_SAMPLE_WARNING, *warnings],
-            }
+            if not fetched_items:
+                return {
+                    "status_code": final_status_code,
+                    "total_collected": 0,
+                    "next_cursor": None,
+                    "raw_data": payload,
+                    "endpoint_results": endpoint_results,
+                    "page_diagnostics": page_diagnostics,
+                    "request_params": request_params,
+                    "warnings": _ioc_stream_warnings(normalized_collection_mode, warnings),
+                }
+            api_error = _extract_api_error_detail(payload)
+            warnings.append(
+                f"Page {page_number} returned HTTP {final_status_code}"
+                + (f": {api_error}" if api_error else "")
+                + ". Report uses data from the previous pages only."
+            )
+            stopped_reason = "upstream_error"
+            final_status_code = 200
+            break
 
         page_payloads.append(payload)
         page_items = _extract_api_items(payload)
-        collected_items.extend(page_items)
+        fetched_items.extend(page_items)
 
-        next_cursor = _extract_next_cursor(payload)
+        cursor_details = _extract_next_cursor_details(payload)
+        next_cursor = cursor_details["next_cursor"]
+        next_cursor_source = cursor_details["next_cursor_source"]
+        ignored_cursor_candidate = cursor_details["ignored_cursor_candidate"]
+        ignored_cursor_reason = cursor_details["ignored_cursor_reason"]
         next_link_url = _normalize_ioc_stream_next_url(
             _extract_next_link_from_payload(payload) or _extract_next_link_from_headers(
-            endpoint_result.get("response_headers", {})
+                endpoint_result.get("response_headers", {})
             )
         )
         if not next_cursor and next_link_url:
             next_cursor = _extract_cursor_from_url(next_link_url)
+            if next_cursor:
+                next_cursor_source = "payload.links.next"
 
         page_diagnostics.append(
             {
@@ -648,10 +728,25 @@ def fetch_ioc_stream(
                 "raw_page_item_count": len(page_items),
                 "next_cursor_found": bool(next_cursor),
                 "next_link_found": bool(next_link_url),
+                "next_cursor_source": next_cursor_source,
+                "ignored_cursor_candidate": ignored_cursor_candidate,
+                "ignored_cursor_reason": ignored_cursor_reason,
                 "request_url": current_url,
                 "request_params": params or {},
             }
         )
+
+        if normalized_collection_mode == "time_window" and start_datetime is not None:
+            oldest_stream_timestamp, oldest_stream_field = (
+                _oldest_stream_event_timestamp_with_field(fetched_items)
+            )
+            if (
+                oldest_stream_timestamp is not None
+                and oldest_stream_timestamp <= start_datetime
+            ):
+                stopped_reason = "start_date_reached"
+                stop_timestamp_field = oldest_stream_field
+                break
 
         if not next_cursor or not page_items:
             if next_link_url:
@@ -675,21 +770,42 @@ def fetch_ioc_stream(
         current_url = VIRUSTOTAL_IOC_STREAM_URL
         current_cursor = next_cursor
 
+    if (
+        normalized_collection_mode == "time_window"
+        and stopped_reason == "requested_pages_reached"
+    ):
+        stopped_reason = "max_pages_reached"
+
+    kept_items = (
+        [
+            item
+            for item in fetched_items
+            if _ioc_item_is_in_time_window(item, start_datetime, end_datetime)
+        ]
+        if normalized_collection_mode == "time_window"
+        and start_datetime is not None
+        and end_datetime is not None
+        else list(fetched_items)
+    )
     collection_metadata = _build_ioc_stream_collection_metadata(
-        items=collected_items,
+        fetched_items=fetched_items,
+        kept_items=kept_items,
         pages_fetched=len(endpoint_results),
         requested_pages=normalized_pages_to_fetch,
         page_size=IOC_STREAM_API_PAGE_LIMIT,
         stopped_reason=stopped_reason,
+        collection_mode=normalized_collection_mode,
+        time_window_metadata=time_window_metadata,
+        stop_timestamp_field=stop_timestamp_field,
     )
     collection_metadata["page_diagnostics"] = page_diagnostics
-    warnings = [IOC_STREAM_SAMPLE_WARNING, *warnings]
+    warnings = _ioc_stream_warnings(normalized_collection_mode, warnings)
 
     return {
         "status_code": final_status_code,
-        "total_collected": len(collected_items),
+        "total_collected": len(kept_items),
         "next_cursor": next_cursor,
-        "raw_data": {"data": collected_items, "pages": page_payloads},
+        "raw_data": {"data": kept_items, "pages": page_payloads},
         "collection": collection_metadata,
         "endpoint_results": endpoint_results,
         "page_diagnostics": page_diagnostics,
@@ -714,6 +830,7 @@ def normalize_ioc_stream_item(item: dict[str, Any]) -> dict[str, Any]:
         )
     )
     value = _extract_ioc_value(item, normalized_attributes, entity_type)
+    ioc_key = stable_ioc_key(entity_type, value)
     source_type = _extract_ioc_source_type(merged_fields, normalized_relationships)
     source_name = _extract_ioc_source_name(merged_fields, normalized_relationships)
     origin = _stringify_value(
@@ -722,25 +839,15 @@ def normalize_ioc_stream_item(item: dict[str, Any]) -> dict[str, Any]:
             ("origin", "source_origin", "notification_origin"),
         )
     ) or "Unknown"
-    matched_date = _stringify_value(
-        _first_present(
-            merged_fields,
-            (
-                "matched_date",
-                "notification_date",
-                "created_at",
-                "creation_date",
-                "date",
-                "last_modification_date",
-            ),
-        )
-    )
+    matched_date = _stringify_value(_extract_stream_event_datetime_value(item))
     gti_score = _extract_ioc_score(merged_fields)
     gti_verdict = _extract_ioc_verdict(merged_fields)
     classification = classify_ioc_risk(gti_score, gti_verdict)
 
     return {
+        "ioc_key": ioc_key,
         "value": value,
+        "display_value": _truncate_ioc_display_value(value),
         "entity_type": entity_type,
         "source_type": source_type,
         "source_name": source_name,
@@ -816,17 +923,24 @@ def enrich_ioc_indicator(api_key: str, indicator: dict[str, Any]) -> dict[str, A
                 entity_type=entity_type,
                 value=value,
             )
-        except GTIClientError as exc:
+        except Exception as exc:
             enriched_indicator["enrichment_status"] = "error"
             enriched_indicator["enrichment_error"] = str(exc)
             return enriched_indicator
 
     if enrichment.get("status") != "success":
-        enriched_indicator["enrichment_status"] = str(enrichment.get("status") or "error")
+        enrichment_status = str(enrichment.get("status") or "error")
+        enriched_indicator["enrichment_status"] = (
+            "skipped"
+            if enrichment_status in {"skipped", "unsupported"}
+            else enrichment_status
+        )
         enriched_indicator["enrichment_http_status"] = enrichment.get("http_status")
         enriched_indicator["enrichment_error"] = str(
             enrichment.get("error") or "Enrichment failed."
         )
+        if enrichment.get("skip_reason"):
+            enriched_indicator["enrichment_skip_reason"] = str(enrichment.get("skip_reason"))
         return enriched_indicator
 
     malicious = _safe_int(enrichment.get("malicious"))
@@ -921,6 +1035,8 @@ def build_ioc_stream_report(
     enrichment_attempted = 0
     enrichment_succeeded = 0
     enrichment_errors = 0
+    enrichment_skipped = 0
+    enrichment_skipped_too_long_url = 0
     requested_enrichment_limit = (
         len(indicators)
         if enrichment_limit is None
@@ -936,8 +1052,13 @@ def build_ioc_stream_report(
         for index in range(actual_enrichment_limit):
             enrichment_attempted += 1
             indicators[index] = enrich_ioc_indicator(api_key, indicators[index])
-            if indicators[index].get("enrichment_status") == "success":
+            enrichment_status = indicators[index].get("enrichment_status")
+            if enrichment_status == "success":
                 enrichment_succeeded += 1
+            elif enrichment_status == "skipped":
+                enrichment_skipped += 1
+                if indicators[index].get("enrichment_skip_reason") == "url_too_long":
+                    enrichment_skipped_too_long_url += 1
             else:
                 enrichment_errors += 1
 
@@ -951,15 +1072,33 @@ def build_ioc_stream_report(
         "duplicate_count": duplicate_count,
         "duplicates_removed": duplicate_count,
         "unique_ioc_count": len(indicators),
-        "raw_ioc_count": len(raw_indicators),
+        "raw_ioc_count": collection_metadata.get("raw_ioc_count", len(raw_indicators)),
+        "iocs_inside_window": len(raw_indicators),
         "stopped_reason": collection_metadata.get("stopped_reason", "unknown"),
+        "timestamp_fields_seen": collection_metadata.get("timestamp_fields_seen", []),
+        "stop_timestamp_field": collection_metadata.get("stop_timestamp_field"),
+        "oldest_stream_event_timestamp": collection_metadata.get(
+            "oldest_stream_event_timestamp"
+        ),
+        "oldest_object_metadata_timestamp": collection_metadata.get(
+            "oldest_object_metadata_timestamp"
+        ),
+        "ignored_object_metadata_old_timestamp_count": collection_metadata.get(
+            "ignored_object_metadata_old_timestamp_count",
+            0,
+        ),
+        "items_without_stream_timestamp_count": collection_metadata.get(
+            "items_without_stream_timestamp_count",
+            0,
+        ),
     }
     collection_metadata["total_collected"] = len(indicators)
     collection_metadata["total_enriched"] = enrichment_succeeded
     collection_metadata["unique_ioc_count"] = len(indicators)
     collection_metadata["duplicate_count"] = duplicate_count
     collection_metadata["duplicates_removed"] = duplicate_count
-    collection_metadata["raw_ioc_count"] = len(raw_indicators)
+    collection_metadata.setdefault("raw_ioc_count", len(raw_indicators))
+    collection_metadata["iocs_inside_window"] = len(raw_indicators)
     collection_metadata["page_diagnostics"] = diagnostics["page_diagnostics"]
     collection_metadata.setdefault(
         "pages_fetched",
@@ -993,7 +1132,7 @@ def build_ioc_stream_report(
         key=lambda indicator: (
             -IOC_STREAM_RISK_ORDER.get(str(indicator.get("severity")), 0),
             -(indicator.get("gti_score") if indicator.get("gti_score") is not None else -1),
-            str(indicator.get("value") or ""),
+            str(indicator.get("ioc_key") or ""),
         ),
     )
 
@@ -1008,11 +1147,17 @@ def build_ioc_stream_report(
         "pages_fetched": collection_metadata.get("pages_fetched", 0),
         "page_size": collection_metadata.get("page_size", IOC_STREAM_API_PAGE_LIMIT),
         "total_enriched": enrichment_succeeded,
-        "raw_ioc_count": len(raw_indicators),
+        "raw_ioc_count": collection_metadata.get("raw_ioc_count", len(raw_indicators)),
+        "iocs_inside_window": len(raw_indicators),
         "unique_ioc_count": len(indicators),
         "duplicates_removed": duplicate_count,
         "earliest_timestamp": collection_metadata.get("earliest_timestamp"),
         "latest_timestamp": collection_metadata.get("latest_timestamp"),
+        "earliest_fetched_timestamp": collection_metadata.get("earliest_fetched_timestamp"),
+        "latest_fetched_timestamp": collection_metadata.get("latest_fetched_timestamp"),
+        "earliest_kept_timestamp": collection_metadata.get("earliest_kept_timestamp"),
+        "latest_kept_timestamp": collection_metadata.get("latest_kept_timestamp"),
+        "coverage_status": collection_metadata.get("coverage_status"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1046,6 +1191,8 @@ def build_ioc_stream_report(
                 "attempted": enrichment_attempted,
                 "succeeded": enrichment_succeeded,
                 "errors": enrichment_errors,
+                "skipped": enrichment_skipped,
+                "skipped_too_long_url": enrichment_skipped_too_long_url,
                 "requested_limit": requested_enrichment_limit,
                 "actual_limit": actual_enrichment_limit,
             },
@@ -1056,16 +1203,22 @@ def build_ioc_stream_report(
 def _dedupe_ioc_stream_indicators(
     indicators: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int]:
-    """Keep the first indicator for each entity_type + value pair."""
+    """Keep the first indicator for each stable IoC key."""
 
     unique_indicators: list[dict[str, Any]] = []
-    seen_keys: set[tuple[str, str]] = set()
+    seen_keys: set[str] = set()
     duplicate_count = 0
 
     for indicator in indicators:
-        entity_type = str(indicator.get("entity_type") or "Unknown").strip().casefold()
-        value = str(indicator.get("value") or "").strip().casefold()
-        dedupe_key = (entity_type, value)
+        dedupe_key = str(
+            indicator.get("ioc_key")
+            or stable_ioc_key(indicator.get("entity_type"), indicator.get("value"))
+        )
+        indicator.setdefault("ioc_key", dedupe_key)
+        indicator.setdefault(
+            "display_value",
+            _truncate_ioc_display_value(indicator.get("value")),
+        )
         if dedupe_key in seen_keys:
             duplicate_count += 1
             continue
@@ -2431,16 +2584,25 @@ def _extract_api_error_detail(payload: Any) -> str:
         for key in ("message", "code"):
             value = error.get(key)
             if value is not None:
-                return str(value).strip()
+                return _shorten_api_error_message(str(value).strip())
     elif error:
-        return str(error).strip()
+        return _shorten_api_error_message(str(error).strip())
 
     for key in ("message", "detail"):
         value = payload.get(key)
         if value is not None:
-            return str(value).strip()
+            return _shorten_api_error_message(str(value).strip())
 
     return ""
+
+
+def _shorten_api_error_message(message: str, max_length: int = 300) -> str:
+    if not isinstance(message, str):
+        return ""
+    message = re.sub(r"https?://\S+", "<url>", message)
+    if len(message) <= max_length:
+        return message
+    return message[: max_length - 3].rstrip() + "..."
 
 
 def list_dtm_monitors(
@@ -2793,37 +2955,133 @@ def _merge_item_with_attributes(
 def _extract_next_cursor(payload: Any) -> str | None:
     """Extract a next-page cursor when the API exposes one."""
 
-    if not isinstance(payload, dict):
-        return None
+    return _extract_next_cursor_details(payload)["next_cursor"]
 
-    for direct_key in ("next_cursor", "cursor", "next"):
-        direct_value = payload.get(direct_key)
-        if isinstance(direct_value, str) and direct_value.strip():
-            return direct_value
+
+def _extract_next_cursor_details(payload: Any) -> dict[str, Any]:
+    """Extract a next-page cursor and diagnostics from a payload."""
+
+    result = {
+        "next_cursor": None,
+        "next_cursor_source": None,
+        "ignored_cursor_candidate": None,
+        "ignored_cursor_reason": None,
+    }
+    if not isinstance(payload, dict):
+        return result
+
+    def _try_candidate(candidate: Any, source: str) -> bool:
+        if not isinstance(candidate, str) or not candidate.strip():
+            return False
+
+        candidate_value = candidate.strip()
+        if candidate_value.startswith("http://") or candidate_value.startswith("https://"):
+            if _is_ioc_stream_pagination_url(candidate_value):
+                extracted = _extract_cursor_from_url(candidate_value)
+                if extracted:
+                    result["next_cursor"] = extracted
+                    result["next_cursor_source"] = source
+                    return True
+            result["ignored_cursor_candidate"] = candidate_value
+            result["ignored_cursor_reason"] = (
+                "Full HTTP/HTTPS URL is not accepted as an IoC Stream cursor."
+            )
+            return False
+
+        if is_valid_ioc_stream_cursor(candidate_value):
+            result["next_cursor"] = candidate_value
+            result["next_cursor_source"] = source
+            return True
+
+        result["ignored_cursor_candidate"] = candidate_value
+        result["ignored_cursor_reason"] = (
+            "Cursor candidate did not meet IoC Stream cursor validation rules."
+        )
+        return False
+
+    for direct_key in ("next_cursor", "cursor"):
+        if _try_candidate(payload.get(direct_key), f"payload.{direct_key}"):
+            return result
 
     meta = payload.get("meta", {})
     if isinstance(meta, dict):
-        for meta_key in ("next_cursor", "cursor", "next"):
-            meta_value = meta.get(meta_key)
-            if isinstance(meta_value, str) and meta_value.strip():
-                return meta_value
+        for meta_key in ("next_cursor", "cursor"):
+            if _try_candidate(meta.get(meta_key), f"payload.meta.{meta_key}"):
+                return result
+        meta_next_candidate = meta.get("next")
+        if isinstance(meta_next_candidate, str) and meta_next_candidate.strip():
+            if result["ignored_cursor_candidate"] is None:
+                result["ignored_cursor_candidate"] = meta_next_candidate.strip()
+                result["ignored_cursor_reason"] = (
+                    "payload.meta.next is not accepted as an IoC Stream cursor source."
+                )
+
+    next_candidate = payload.get("next")
+    if isinstance(next_candidate, str) and next_candidate.strip():
+        if result["ignored_cursor_candidate"] is None:
+            result["ignored_cursor_candidate"] = next_candidate.strip()
+            result["ignored_cursor_reason"] = (
+                "payload.next is not accepted as an IoC Stream cursor source."
+            )
 
     links = payload.get("links", {})
-    if not isinstance(links, dict):
-        return None
+    if isinstance(links, dict):
+        next_link = links.get("next")
+        if isinstance(next_link, dict):
+            next_link = _first_present(next_link, ("href", "url", "link"))
+        if isinstance(next_link, str) and next_link.strip():
+            candidate = next_link.strip()
+            if candidate.startswith("http://") or candidate.startswith("https://"):
+                if _is_ioc_stream_pagination_url(candidate):
+                    extracted = _extract_cursor_from_url(candidate)
+                    if extracted:
+                        result["next_cursor"] = extracted
+                        result["next_cursor_source"] = "payload.links.next"
+                        return result
+                result["ignored_cursor_candidate"] = candidate
+                result["ignored_cursor_reason"] = (
+                    "Full HTTP/HTTPS URL was not accepted as an IoC Stream cursor."
+                )
+                return result
+            extracted = _extract_cursor_from_url(candidate)
+            if extracted:
+                result["next_cursor"] = extracted
+                result["next_cursor_source"] = "payload.links.next"
+                return result
+            result["ignored_cursor_candidate"] = candidate
+            result["ignored_cursor_reason"] = (
+                "Next link did not contain a valid IoC Stream cursor parameter."
+            )
 
-    next_link = links.get("next")
-    if isinstance(next_link, dict):
-        next_link = _first_present(next_link, ("href", "url", "link"))
-    if not isinstance(next_link, str) or not next_link.strip():
-        return None
+    return result
 
-    parsed_next_link = urlparse(next_link)
-    cursor_values = parse_qs(parsed_next_link.query).get("cursor", [])
-    if cursor_values and cursor_values[0]:
-        return cursor_values[0]
 
-    return None
+def _is_ioc_stream_pagination_url(url: str) -> bool:
+    if not isinstance(url, str):
+        return False
+    parsed = urlparse(url)
+    path = parsed.path or ""
+    hostname = (parsed.hostname or "").casefold()
+    if path.startswith("/api/v3/ioc_stream"):
+        return True
+    if hostname.endswith("virustotal.com") and path.startswith("/api/v3/ioc_stream"):
+        return True
+    return False
+
+
+def is_valid_ioc_stream_cursor(candidate: Any) -> bool:
+    if not isinstance(candidate, str):
+        return False
+    candidate_value = candidate.strip()
+    if not candidate_value:
+        return False
+    if candidate_value.startswith("http://") or candidate_value.startswith("https://"):
+        return False
+    if "://" in candidate_value:
+        return False
+    if len(candidate_value.encode("utf-8")) > 500:
+        return False
+    return True
 
 
 def _normalize_ioc_stream_next_url(url: str | None) -> str | None:
@@ -3350,42 +3608,140 @@ def _filter_mock_ioc_stream_payload(
     entity_type: str,
     origin: str,
     pages_to_fetch: int,
+    collection_mode: str,
+    time_window_metadata: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    items = []
+    fetched_items = []
     for item in _extract_api_items(payload):
         normalized_item = normalize_ioc_stream_item(item)
         if entity_type != "all" and normalized_item["entity_type"] != entity_type:
             continue
         if origin != "all" and normalized_item["origin"].casefold() != origin:
             continue
-        items.append(item)
+        fetched_items.append(item)
+
+    kept_items = (
+        [
+            item
+            for item in fetched_items
+            if _ioc_item_is_in_time_window(
+                item,
+                time_window_metadata["start_datetime"],
+                time_window_metadata["end_datetime"],
+            )
+        ]
+        if collection_mode == "time_window" and time_window_metadata
+        else list(fetched_items)
+    )
+    stopped_reason = "no_more_pages"
+    stop_timestamp_field = None
+    if collection_mode == "time_window" and time_window_metadata:
+        oldest_stream_timestamp, oldest_stream_field = (
+            _oldest_stream_event_timestamp_with_field(fetched_items)
+        )
+        if (
+            oldest_stream_timestamp is not None
+            and oldest_stream_timestamp <= time_window_metadata["start_datetime"]
+        ):
+            stopped_reason = "start_date_reached"
+            stop_timestamp_field = oldest_stream_field
 
     collection_metadata = _build_ioc_stream_collection_metadata(
-        items=items,
+        fetched_items=fetched_items,
+        kept_items=kept_items,
         pages_fetched=1,
         requested_pages=pages_to_fetch,
         page_size=IOC_STREAM_API_PAGE_LIMIT,
-        stopped_reason="no_more_pages",
+        stopped_reason=stopped_reason,
+        collection_mode=collection_mode,
+        time_window_metadata=time_window_metadata,
+        stop_timestamp_field=stop_timestamp_field,
     )
-    return {"data": items, "links": payload.get("links", {})}, collection_metadata
+    return {"data": kept_items, "links": payload.get("links", {})}, collection_metadata
 
 
-def _extract_ioc_item_datetime(item: dict[str, Any]) -> datetime | None:
+def extract_stream_event_datetime(item: dict[str, Any]) -> datetime | None:
+    """Return the IoC Stream notification timestamp, never object metadata dates."""
+
+    item_datetime, _ = _extract_stream_event_datetime_with_field(item)
+    return item_datetime
+
+
+def extract_object_metadata_datetime(item: dict[str, Any]) -> datetime | None:
+    """Return object metadata timestamps that must not control stream pagination."""
+
+    item_datetime, _ = _extract_object_metadata_datetime_with_field(item)
+    return item_datetime
+
+
+def _extract_stream_event_datetime_value(item: dict[str, Any]) -> Any:
+    fields = _ioc_item_fields(item)
+    for field_name in IOC_STREAM_EVENT_TIMESTAMP_FIELDS:
+        value = fields.get(field_name)
+        if _parse_ioc_stream_datetime(value) is not None:
+            return value
+
+    value = fields.get("created_at")
+    if _created_at_is_stream_event(item, fields) and _parse_ioc_stream_datetime(value):
+        return value
+
+    return None
+
+
+def _extract_stream_event_datetime_with_field(
+    item: dict[str, Any],
+) -> tuple[datetime | None, str | None]:
+    fields = _ioc_item_fields(item)
+    for field_name in IOC_STREAM_EVENT_TIMESTAMP_FIELDS:
+        item_datetime = _parse_ioc_stream_datetime(fields.get(field_name))
+        if item_datetime is not None:
+            return item_datetime, field_name
+
+    created_at_datetime = _parse_ioc_stream_datetime(fields.get("created_at"))
+    if created_at_datetime is not None and _created_at_is_stream_event(item, fields):
+        return created_at_datetime, "created_at"
+
+    return None, None
+
+
+def _extract_object_metadata_datetime_with_field(
+    item: dict[str, Any],
+) -> tuple[datetime | None, str | None]:
+    fields = _ioc_item_fields(item)
+    for field_name in IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS:
+        item_datetime = _parse_ioc_stream_datetime(fields.get(field_name))
+        if item_datetime is not None:
+            return item_datetime, field_name
+
+    created_at_datetime = _parse_ioc_stream_datetime(fields.get("created_at"))
+    if created_at_datetime is not None and not _created_at_is_stream_event(item, fields):
+        return created_at_datetime, "created_at"
+
+    return None, None
+
+
+def _ioc_item_fields(item: dict[str, Any]) -> dict[str, Any]:
     attributes = item.get("attributes", {})
     normalized_attributes = attributes if isinstance(attributes, dict) else {}
-    fields = _merge_item_with_attributes(item, normalized_attributes)
-    value = _first_present(
-        fields,
-        (
-            "matched_date",
-            "notification_date",
-            "created_at",
-            "creation_date",
-            "date",
-            "last_modification_date",
-        ),
+    return _merge_item_with_attributes(item, normalized_attributes)
+
+
+def _created_at_is_stream_event(item: dict[str, Any], fields: dict[str, Any]) -> bool:
+    type_candidates = (
+        item.get("type"),
+        fields.get("type"),
+        fields.get("object_type"),
+        fields.get("entity_type"),
+        fields.get("notification_type"),
+        fields.get("source_type"),
     )
-    return _parse_ioc_stream_datetime(value)
+    for candidate in type_candidates:
+        text = str(candidate or "").strip().casefold().replace("-", "_")
+        if text in IOC_STREAM_CREATED_AT_NOTIFICATION_TYPES:
+            return True
+        if "notification" in text and text not in IOC_STREAM_ENTITY_TYPES:
+            return True
+    return False
 
 
 def _parse_ioc_stream_datetime(value: Any) -> datetime | None:
@@ -3418,30 +3774,276 @@ def _parse_ioc_stream_datetime(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _build_ioc_stream_collection_metadata(
+def _resolve_ioc_stream_time_window(
+    time_window: str | None,
+    start_date: str | None,
+    end_date: str | None,
+) -> dict[str, Any]:
+    normalized_window = (time_window or "last_24h").strip().casefold()
+    window_aliases = {
+        "24h": "last_24h",
+        "last24h": "last_24h",
+        "last_24_hours": "last_24h",
+        "7d": "last_7d",
+        "last7d": "last_7d",
+        "30d": "last_30d",
+        "last30d": "last_30d",
+    }
+    normalized_window = window_aliases.get(normalized_window, normalized_window)
+    if normalized_window not in IOC_STREAM_TIME_WINDOWS:
+        allowed_display = ", ".join(sorted(IOC_STREAM_TIME_WINDOWS))
+        raise ValueError(f"Invalid time_window. Allowed values: {allowed_display}.")
+
+    now = datetime.now(timezone.utc)
+    if normalized_window == "last_24h":
+        start_datetime = now - timedelta(hours=24)
+        end_datetime = now
+        label = "Last 24h"
+    elif normalized_window == "last_7d":
+        start_datetime = now - timedelta(days=7)
+        end_datetime = now
+        label = "Last 7d"
+    elif normalized_window == "last_30d":
+        start_datetime = now - timedelta(days=30)
+        end_datetime = now
+        label = "Last 30d"
+    else:
+        normalized_start_date = _normalize_ioc_stream_date(start_date, "start_date")
+        normalized_end_date = _normalize_ioc_stream_date(end_date, "end_date")
+        if not normalized_start_date or not normalized_end_date:
+            raise ValueError("Custom IoC Stream windows require start_date and end_date.")
+        start_datetime = datetime.fromisoformat(normalized_start_date).replace(
+            tzinfo=timezone.utc
+        )
+        end_datetime = (
+            datetime.fromisoformat(normalized_end_date).replace(tzinfo=timezone.utc)
+            + timedelta(days=1)
+            - timedelta(microseconds=1)
+        )
+        if end_datetime < start_datetime:
+            raise ValueError("end_date must be on or after start_date.")
+        label = "Custom"
+
+    return {
+        "key": normalized_window,
+        "label": label,
+        "start_datetime": start_datetime,
+        "end_datetime": end_datetime,
+        "start_date": start_datetime.date().isoformat(),
+        "end_date": end_datetime.date().isoformat(),
+        "start_timestamp": start_datetime.isoformat(),
+        "end_timestamp": end_datetime.isoformat(),
+    }
+
+
+def _public_ioc_time_window_metadata(
+    time_window_metadata: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not time_window_metadata:
+        return None
+    return {
+        "key": time_window_metadata.get("key"),
+        "label": time_window_metadata.get("label"),
+        "start_date": time_window_metadata.get("start_date"),
+        "end_date": time_window_metadata.get("end_date"),
+        "start_timestamp": time_window_metadata.get("start_timestamp"),
+        "end_timestamp": time_window_metadata.get("end_timestamp"),
+    }
+
+
+def _ioc_item_is_in_time_window(
+    item: dict[str, Any],
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> bool:
+    item_datetime = extract_stream_event_datetime(item)
+    if item_datetime is None:
+        return False
+    return start_datetime <= item_datetime <= end_datetime
+
+
+def _stream_event_timestamps_with_fields(
     items: list[dict[str, Any]],
+) -> list[tuple[datetime, str]]:
+    timestamps: list[tuple[datetime, str]] = []
+    for item in items:
+        item_datetime, field_name = _extract_stream_event_datetime_with_field(item)
+        if item_datetime is not None and field_name:
+            timestamps.append((item_datetime, field_name))
+    return timestamps
+
+
+def _object_metadata_timestamps_with_fields(
+    items: list[dict[str, Any]],
+) -> list[tuple[datetime, str]]:
+    timestamps: list[tuple[datetime, str]] = []
+    for item in items:
+        item_datetime, field_name = _extract_object_metadata_datetime_with_field(item)
+        if item_datetime is not None and field_name:
+            timestamps.append((item_datetime, field_name))
+    return timestamps
+
+
+def _oldest_stream_event_timestamp_with_field(
+    items: list[dict[str, Any]],
+) -> tuple[datetime | None, str | None]:
+    timestamps = _stream_event_timestamps_with_fields(items)
+    if not timestamps:
+        return None, None
+    return min(timestamps, key=lambda row: row[0])
+
+
+def _oldest_stream_event_timestamp(items: list[dict[str, Any]]) -> datetime | None:
+    item_datetime, _ = _oldest_stream_event_timestamp_with_field(items)
+    return item_datetime
+
+
+def _newest_stream_event_timestamp(items: list[dict[str, Any]]) -> datetime | None:
+    timestamps = [item_datetime for item_datetime, _ in _stream_event_timestamps_with_fields(items)]
+    return max(timestamps) if timestamps else None
+
+
+def _oldest_object_metadata_timestamp(items: list[dict[str, Any]]) -> datetime | None:
+    timestamps = [item_datetime for item_datetime, _ in _object_metadata_timestamps_with_fields(items)]
+    return min(timestamps) if timestamps else None
+
+
+def _ioc_stream_coverage_status(
+    collection_mode: str,
+    stopped_reason: str,
+    fetched_items: list[dict[str, Any]],
+    time_window_metadata: dict[str, Any] | None,
+) -> str | None:
+    if collection_mode != "time_window":
+        return None
+    if not fetched_items or not time_window_metadata:
+        return "unknown"
+    oldest_timestamp = _oldest_stream_event_timestamp(fetched_items)
+    if oldest_timestamp is None:
+        return "unknown"
+    if oldest_timestamp <= time_window_metadata["start_datetime"]:
+        return "complete"
+    if stopped_reason == "max_pages_reached":
+        return "partial"
+    if stopped_reason == "no_more_pages":
+        return "no_more_pages"
+    return "unknown"
+
+
+def _ioc_stream_warnings(collection_mode: str, warnings: list[str]) -> list[str]:
+    if collection_mode == "recent_pages":
+        return [IOC_STREAM_SAMPLE_WARNING, *warnings]
+    return warnings
+
+
+def _build_ioc_stream_timestamp_diagnostics(
+    fetched_items: list[dict[str, Any]],
+    time_window_metadata: dict[str, Any] | None,
+    stop_timestamp_field: str | None,
+) -> dict[str, Any]:
+    stream_timestamps = _stream_event_timestamps_with_fields(fetched_items)
+    object_timestamps = _object_metadata_timestamps_with_fields(fetched_items)
+    oldest_stream_timestamp = (
+        min((item_datetime for item_datetime, _ in stream_timestamps), default=None)
+    )
+    oldest_object_timestamp = (
+        min((item_datetime for item_datetime, _ in object_timestamps), default=None)
+    )
+    timestamp_fields_seen = sorted(
+        {
+            field_name
+            for _, field_name in [*stream_timestamps, *object_timestamps]
+            if field_name
+        }
+    )
+    start_datetime = (
+        time_window_metadata.get("start_datetime") if time_window_metadata else None
+    )
+    ignored_old_metadata_count = 0
+    if isinstance(start_datetime, datetime):
+        for item in fetched_items:
+            object_datetime = extract_object_metadata_datetime(item)
+            if object_datetime is None or object_datetime > start_datetime:
+                continue
+            stream_datetime = extract_stream_event_datetime(item)
+            if stream_datetime is None or stream_datetime > start_datetime:
+                ignored_old_metadata_count += 1
+
+    return {
+        "timestamp_fields_seen": timestamp_fields_seen,
+        "stop_timestamp_field": stop_timestamp_field,
+        "oldest_stream_event_timestamp": (
+            oldest_stream_timestamp.isoformat() if oldest_stream_timestamp else None
+        ),
+        "oldest_object_metadata_timestamp": (
+            oldest_object_timestamp.isoformat() if oldest_object_timestamp else None
+        ),
+        "ignored_object_metadata_old_timestamp_count": ignored_old_metadata_count,
+        "items_without_stream_timestamp_count": (
+            len(fetched_items) - len(stream_timestamps)
+        ),
+    }
+
+
+def _build_ioc_stream_collection_metadata(
+    fetched_items: list[dict[str, Any]],
+    kept_items: list[dict[str, Any]],
     pages_fetched: int,
     requested_pages: int,
     page_size: int,
     stopped_reason: str,
+    collection_mode: str,
+    time_window_metadata: dict[str, Any] | None,
+    stop_timestamp_field: str | None = None,
 ) -> dict[str, Any]:
-    timestamps = [
-        item_datetime
-        for item_datetime in (_extract_ioc_item_datetime(item) for item in items)
-        if item_datetime is not None
-    ]
-    earliest_timestamp = min(timestamps).isoformat() if timestamps else None
-    latest_timestamp = max(timestamps).isoformat() if timestamps else None
+    earliest_fetched_timestamp = _oldest_stream_event_timestamp(fetched_items)
+    latest_fetched_timestamp = _newest_stream_event_timestamp(fetched_items)
+    earliest_kept_timestamp = _oldest_stream_event_timestamp(kept_items)
+    latest_kept_timestamp = _newest_stream_event_timestamp(kept_items)
+    coverage_status = _ioc_stream_coverage_status(
+        collection_mode,
+        stopped_reason,
+        fetched_items,
+        time_window_metadata,
+    )
+    timestamp_diagnostics = _build_ioc_stream_timestamp_diagnostics(
+        fetched_items=fetched_items,
+        time_window_metadata=time_window_metadata,
+        stop_timestamp_field=stop_timestamp_field,
+    )
     return {
-        "total_collected": len(items),
-        "raw_ioc_count": len(items),
+        "collection_mode": collection_mode,
+        "time_window": _public_ioc_time_window_metadata(time_window_metadata),
+        "total_collected": len(kept_items),
+        "raw_ioc_count": len(fetched_items),
+        "raw_iocs_fetched": len(fetched_items),
+        "iocs_inside_window": len(kept_items),
         "total_enriched": 0,
         "requested_pages": requested_pages,
+        "max_pages": requested_pages,
         "pages_fetched": pages_fetched,
         "page_size": page_size,
-        "earliest_timestamp": earliest_timestamp,
-        "latest_timestamp": latest_timestamp,
+        "earliest_timestamp": (
+            earliest_kept_timestamp or earliest_fetched_timestamp
+        ).isoformat() if (earliest_kept_timestamp or earliest_fetched_timestamp) else None,
+        "latest_timestamp": (
+            latest_kept_timestamp or latest_fetched_timestamp
+        ).isoformat() if (latest_kept_timestamp or latest_fetched_timestamp) else None,
+        "earliest_fetched_timestamp": (
+            earliest_fetched_timestamp.isoformat() if earliest_fetched_timestamp else None
+        ),
+        "latest_fetched_timestamp": (
+            latest_fetched_timestamp.isoformat() if latest_fetched_timestamp else None
+        ),
+        "earliest_kept_timestamp": (
+            earliest_kept_timestamp.isoformat() if earliest_kept_timestamp else None
+        ),
+        "latest_kept_timestamp": (
+            latest_kept_timestamp.isoformat() if latest_kept_timestamp else None
+        ),
         "stopped_reason": stopped_reason,
+        **timestamp_diagnostics,
+        **({"coverage_status": coverage_status} if coverage_status else {}),
     }
 
 
@@ -3631,6 +4233,16 @@ def _fetch_ioc_enrichment(
     entity_type: str,
     value: str,
 ) -> dict[str, Any]:
+    normalized_type = _normalize_ioc_entity_type(entity_type)
+    if normalized_type == "url" and _url_enrichment_is_too_long(value):
+        return {
+            "status": "skipped",
+            "http_status": None,
+            "error": "URL too long for safe /urls/{id} enrichment",
+            "skip_reason": "url_too_long",
+            "has_risk_context": False,
+        }
+
     lookup_url = _build_ioc_enrichment_url(entity_type, value)
     if not lookup_url:
         return {
@@ -3674,11 +4286,27 @@ def _build_ioc_enrichment_url(entity_type: str, value: str) -> str | None:
     if normalized_type == "ip_address":
         return VIRUSTOTAL_IP_ADDRESS_LOOKUP_URL.format(quote(value, safe=""))
     if normalized_type == "url":
-        encoded_url_id = base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii").rstrip("=")
+        encoded_url_id = _build_vt_url_id(value)
+        if encoded_url_id is None:
+            return None
         return VIRUSTOTAL_URL_LOOKUP_URL.format(encoded_url_id)
     if normalized_type == "file":
         return VIRUSTOTAL_FILE_LOOKUP_URL.format(quote(value, safe=""))
     return None
+
+
+def _build_vt_url_id(value: str) -> str | None:
+    value_bytes = value.encode("utf-8")
+    encoded_url_id = base64.urlsafe_b64encode(value_bytes).decode("ascii").rstrip("=")
+    if len(value_bytes) > MAX_URL_ENRICHMENT_INPUT_BYTES:
+        return None
+    if len(encoded_url_id.encode("utf-8")) > MAX_VT_URL_ID_BYTES:
+        return None
+    return encoded_url_id
+
+
+def _url_enrichment_is_too_long(value: str) -> bool:
+    return _build_vt_url_id(value) is None
 
 
 def _extract_ioc_enrichment_attributes(payload: Any) -> dict[str, Any]:
@@ -3800,7 +4428,7 @@ def _counter_to_chart_rows(
 ) -> list[dict[str, Any]]:
     order_index = {label: index for index, label in enumerate(preferred_order)}
     return [
-        {"label": label, "value": count}
+        {"id": stable_ioc_key("chart", label), "label": label, "value": count}
         for label, count in sorted(
             counts.items(),
             key=lambda item: (
@@ -3855,6 +4483,7 @@ def _build_ioc_type_risk_rows(
         )
         rows.append(
             {
+                "id": stable_ioc_key("ioc_type", entity_type),
                 "ioc_type": entity_type,
                 "total_count": len(items),
                 "average_risk_score": average_score,
@@ -3885,12 +4514,15 @@ def _build_top_dangerous_ioc_rows(
             -_safe_int(indicator.get("suspicious")),
             reputation is None,
             reputation if reputation is not None else 0,
-            str(indicator.get("value") or "").casefold(),
+            str(indicator.get("ioc_key") or ""),
         )
 
     return [
         {
+            "ioc_key": indicator.get("ioc_key"),
             "indicator": indicator.get("value"),
+            "display_value": indicator.get("display_value")
+            or _truncate_ioc_display_value(indicator.get("value")),
             "type": indicator.get("entity_type"),
             "malicious": _safe_int(indicator.get("malicious")),
             "suspicious": _safe_int(indicator.get("suspicious")),
@@ -3908,6 +4540,7 @@ def _build_distribution_rows(
 ) -> list[dict[str, Any]]:
     return [
         {
+            "id": stable_ioc_key("distribution", label),
             "label": label,
             "count": counts.get(label, 0),
             "value": counts.get(label, 0),
@@ -4035,7 +4668,7 @@ def _build_ioc_business_insights(
     top_dangerous = dangerous_rows[0] if dangerous_rows else None
     if top_dangerous and top_dangerous["malicious"] > 0:
         insights.append(
-            f"The most dangerous enriched indicator is {top_dangerous['indicator']} "
+            f"The most dangerous enriched indicator is {top_dangerous.get('display_value') or top_dangerous['indicator']} "
             f"with {top_dangerous['malicious']} malicious detection(s)."
         )
     else:

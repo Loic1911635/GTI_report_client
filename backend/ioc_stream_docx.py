@@ -34,14 +34,28 @@ def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> s
     enrichment = _as_dict(technical_details.get("enrichment"))
     collection = _as_dict(report_data.get("collection") or technical_details.get("collection"))
     metrics = [
+        ("Collection mode", collection.get("collection_mode", "recent_pages")),
+        ("Time window", _as_dict(collection.get("time_window")).get("label", "n/a")),
         ("Requested pages", collection.get("requested_pages", "Unknown")),
+        ("Max pages", collection.get("max_pages", collection.get("requested_pages", "Unknown"))),
         ("Pages fetched", collection.get("pages_fetched", 0)),
         ("Page size", collection.get("page_size", 40)),
-        ("Raw IoCs returned", collection.get("raw_ioc_count", summary.get("raw_ioc_count", 0))),
-        ("Unique IoCs", collection.get("unique_ioc_count", summary.get("total_iocs", 0))),
+        ("Raw IoCs fetched", collection.get("raw_ioc_count", summary.get("raw_ioc_count", 0))),
+        ("IoCs inside selected window", collection.get("iocs_inside_window", summary.get("iocs_inside_window", collection.get("raw_ioc_count", 0)))),
+        ("Unique IoCs after deduplication", collection.get("unique_ioc_count", summary.get("total_iocs", 0))),
         ("Duplicates removed", collection.get("duplicates_removed", 0)),
-        ("Earliest returned timestamp", collection.get("earliest_timestamp") or "n/a"),
-        ("Latest returned timestamp", collection.get("latest_timestamp") or "n/a"),
+        ("Stopped reason", collection.get("stopped_reason", "unknown")),
+        ("Coverage status", collection.get("coverage_status", "n/a")),
+        ("Earliest fetched timestamp", collection.get("earliest_fetched_timestamp") or "n/a"),
+        ("Latest fetched timestamp", collection.get("latest_fetched_timestamp") or "n/a"),
+        ("Earliest kept timestamp", collection.get("earliest_kept_timestamp") or "n/a"),
+        ("Latest kept timestamp", collection.get("latest_kept_timestamp") or "n/a"),
+        ("Timestamp fields seen", ", ".join(str(field) for field in _as_list(collection.get("timestamp_fields_seen"))) or "n/a"),
+        ("Stop timestamp field", collection.get("stop_timestamp_field") or "n/a"),
+        ("Oldest stream event timestamp", collection.get("oldest_stream_event_timestamp") or "n/a"),
+        ("Oldest object metadata timestamp", collection.get("oldest_object_metadata_timestamp") or "n/a"),
+        ("Ignored old object metadata timestamps", collection.get("ignored_object_metadata_old_timestamp_count", 0)),
+        ("Items without stream timestamp", collection.get("items_without_stream_timestamp_count", 0)),
         ("Total IoCs", summary.get("total_iocs", 0)),
         ("Total enriched", collection.get("total_enriched", enrichment.get("succeeded", 0))),
         ("High risk", summary.get("high_risk", 0)),
@@ -53,7 +67,9 @@ def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> s
         ("Enrichment enabled", enrichment.get("enabled", False)),
         ("Enrichment attempted", enrichment.get("attempted", 0)),
         ("Enrichment succeeded", enrichment.get("succeeded", 0)),
+        ("Enrichment skipped", enrichment.get("skipped", 0)),
         ("Enrichment errors", enrichment.get("errors", 0)),
+        ("Enrichment skipped too-long URLs", enrichment.get("skipped_too_long_url", 0)),
         ("Enrichment requested", enrichment.get("requested_limit", 0)),
         ("Enrichment actual scope", enrichment.get("actual_limit", 0)),
     ]
@@ -179,7 +195,7 @@ def _add_top_indicators_table(document: Document, indicators: list[Any]) -> None
     for indicator in indicators:
         item = _as_dict(indicator)
         cells = table.add_row().cells
-        cells[0].text = str(item.get("value") or "Unknown")
+        cells[0].text = str(item.get("display_value") or item.get("value") or "Unknown")
         cells[1].text = str(item.get("entity_type") or "Unknown")
         cells[2].text = str(item.get("severity") or "Unknown")
         cells[3].text = _format_optional(item.get("malicious"))
@@ -235,7 +251,7 @@ def _add_dangerous_indicators_table(document: Document, indicators: list[Any]) -
     for indicator in indicators:
         item = _as_dict(indicator)
         cells = table.add_row().cells
-        cells[0].text = str(item.get("indicator") or "Unknown")
+        cells[0].text = str(item.get("display_value") or item.get("indicator") or "Unknown")
         cells[1].text = str(item.get("type") or "Unknown")
         cells[2].text = str(item.get("malicious", 0))
         cells[3].text = str(item.get("suspicious", 0))

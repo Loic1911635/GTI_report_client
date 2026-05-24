@@ -236,14 +236,45 @@
                     <details class="sidebar-panel" open>
                         <summary>Stream sample</summary>
                         <label class="field">
+                            <span>Collection mode</span>
+                            <select id="ioc_stream_collection_mode" name="ioc_stream_collection_mode">
+                                <option value="recent_pages" selected>Recent chronological sample</option>
+                                <option value="time_window">Time window</option>
+                            </select>
+                        </label>
+                        <label class="field">
                             <span>Pages to fetch</span>
                             <select id="ioc_stream_pages_to_fetch" name="ioc_stream_pages_to_fetch">
                                 <option value="1">1 page</option>
                                 <option value="2">2 pages</option>
                                 <option value="5" selected>5 pages</option>
                                 <option value="10">10 pages</option>
+                                <option value="custom">Custom</option>
                             </select>
                         </label>
+                        <label class="field" id="ioc_stream_custom_pages_field" hidden>
+                            <span>Custom pages</span>
+                            <input id="ioc_stream_custom_pages" name="ioc_stream_custom_pages" type="number" value="10" min="1" max="50">
+                        </label>
+                        <label class="field" id="ioc_stream_time_window_field" hidden>
+                            <span>Time window</span>
+                            <select id="ioc_stream_time_window" name="ioc_stream_time_window">
+                                <option value="last_24h" selected>Last 24h</option>
+                                <option value="last_7d">Last 7d</option>
+                                <option value="last_30d">Last 30d</option>
+                                <option value="custom">Custom dates</option>
+                            </select>
+                        </label>
+                        <div class="field-row" id="ioc_stream_custom_dates_fields" hidden>
+                            <label class="field">
+                                <span>Start date</span>
+                                <input id="ioc_stream_start_date" name="ioc_stream_start_date" type="date">
+                            </label>
+                            <label class="field">
+                                <span>End date</span>
+                                <input id="ioc_stream_end_date" name="ioc_stream_end_date" type="date">
+                            </label>
+                        </div>
                         <label class="field">
                             <span>Entity Type</span>
                             <select id="ioc_stream_entity_type" name="ioc_stream_entity_type">

@@ -48,7 +48,15 @@ const dtmDashboardButton = document.getElementById("dtm-dashboard-button");
 const iocStreamFields = document.getElementById("ioc-stream-fields");
 const iocStreamActions = document.getElementById("ioc-stream-actions");
 const iocStreamButton = document.getElementById("ioc-stream-button");
+const iocStreamCollectionModeField = document.getElementById("ioc_stream_collection_mode");
 const iocStreamPagesToFetchField = document.getElementById("ioc_stream_pages_to_fetch");
+const iocStreamCustomPagesField = document.getElementById("ioc_stream_custom_pages");
+const iocStreamCustomPagesWrapper = document.getElementById("ioc_stream_custom_pages_field");
+const iocStreamTimeWindowField = document.getElementById("ioc_stream_time_window");
+const iocStreamTimeWindowWrapper = document.getElementById("ioc_stream_time_window_field");
+const iocStreamStartDateField = document.getElementById("ioc_stream_start_date");
+const iocStreamEndDateField = document.getElementById("ioc_stream_end_date");
+const iocStreamCustomDatesWrapper = document.getElementById("ioc_stream_custom_dates_fields");
 const iocStreamEntityTypeField = document.getElementById("ioc_stream_entity_type");
 const iocStreamOriginField = document.getElementById("ioc_stream_origin");
 const iocStreamDocxButton = document.getElementById("ioc-stream-docx-button");
@@ -2379,12 +2387,56 @@ function renderDtmDashboard(responseData) {
 
 function buildIocStreamParams() {
     const params = new URLSearchParams();
-    params.set("max_pages", String(Number(iocStreamPagesToFetchField?.value || 5)));
+    const collectionMode = iocStreamCollectionModeField?.value || "recent_pages";
+    const pagesChoice = iocStreamPagesToFetchField?.value || "5";
+    const maxPages = pagesChoice === "custom"
+        ? Number(iocStreamCustomPagesField?.value || 10)
+        : Number(pagesChoice || 5);
+    params.set("collection_mode", collectionMode);
+    params.set("max_pages", String(maxPages));
     params.set("entity_type", iocStreamEntityTypeField?.value || "all");
     params.set("origin", iocStreamOriginField?.value || "all");
     params.set("enrich", "true");
     params.set("descriptors_only", "false");
+    if (collectionMode === "time_window") {
+        const timeWindow = iocStreamTimeWindowField?.value || "last_24h";
+        params.set("time_window", timeWindow);
+        const startDate = iocStreamStartDateField?.value || "";
+        const endDate = iocStreamEndDateField?.value || "";
+        if (timeWindow === "custom") {
+            if (startDate) params.set("start_date", startDate);
+            if (endDate) params.set("end_date", endDate);
+        }
+    }
     return params;
+}
+
+function syncIocStreamCollectionControls() {
+    const collectionMode = iocStreamCollectionModeField?.value || "recent_pages";
+    const pagesChoice = iocStreamPagesToFetchField?.value || "5";
+    const isCustomPages = pagesChoice === "custom";
+    const isTimeWindow = collectionMode === "time_window";
+    const isCustomWindow = (iocStreamTimeWindowField?.value || "last_24h") === "custom";
+
+    if (iocStreamCustomPagesWrapper) {
+        iocStreamCustomPagesWrapper.hidden = !isCustomPages;
+    }
+    if (iocStreamCustomPagesField) {
+        iocStreamCustomPagesField.disabled = !isCustomPages;
+    }
+    if (iocStreamTimeWindowWrapper) {
+        iocStreamTimeWindowWrapper.hidden = !isTimeWindow;
+    }
+    if (iocStreamTimeWindowField) {
+        iocStreamTimeWindowField.disabled = !isTimeWindow;
+    }
+    if (iocStreamCustomDatesWrapper) {
+        iocStreamCustomDatesWrapper.hidden = !isTimeWindow || !isCustomWindow;
+    }
+    [iocStreamStartDateField, iocStreamEndDateField].filter(Boolean).forEach((field) => {
+        field.disabled = !isTimeWindow || !isCustomWindow;
+        field.required = isTimeWindow && isCustomWindow;
+    });
 }
 
 function normalizeChartRows(rows) {
@@ -2524,20 +2576,30 @@ function RecentExposureCollectionSummary(responseData) {
     const pageDiagnostics = Array.isArray(diagnostics.page_diagnostics)
         ? diagnostics.page_diagnostics
         : (Array.isArray(collection.page_diagnostics) ? collection.page_diagnostics : []);
+    const collectionMode = collection.collection_mode || responseData.technical_details?.request_params?.collection_mode || "recent_pages";
+    const modeLabel = collectionMode === "time_window" ? "Time window" : "Recent chronological sample";
     const stoppedReason = String(collection.stopped_reason || "unknown").replaceAll("_", " ");
-    const earliestTimestamp = collection.earliest_timestamp || responseData.summary?.earliest_timestamp;
-    const latestTimestamp = collection.latest_timestamp || responseData.summary?.latest_timestamp;
+    const earliestFetchedTimestamp = collection.earliest_fetched_timestamp || responseData.summary?.earliest_fetched_timestamp || collection.earliest_timestamp || responseData.summary?.earliest_timestamp;
+    const latestFetchedTimestamp = collection.latest_fetched_timestamp || responseData.summary?.latest_fetched_timestamp || collection.latest_timestamp || responseData.summary?.latest_timestamp;
+    const earliestKeptTimestamp = collection.earliest_kept_timestamp || responseData.summary?.earliest_kept_timestamp || collection.earliest_timestamp || responseData.summary?.earliest_timestamp;
+    const latestKeptTimestamp = collection.latest_kept_timestamp || responseData.summary?.latest_kept_timestamp || collection.latest_timestamp || responseData.summary?.latest_timestamp;
     const cards = [
+        ["Collection Mode", modeLabel, "mode"],
         ["Requested Pages", collection.requested_pages ?? responseData.technical_details?.request_params?.pages_to_fetch ?? "n/a", "input"],
         ["Pages Fetched", collection.pages_fetched ?? responseData.summary?.pages_fetched ?? 0, "GTI pages"],
+        ["Max Pages", collection.max_pages ?? collection.requested_pages ?? "n/a", "safety cap"],
         ["Page Size", collection.page_size ?? responseData.summary?.page_size ?? "n/a", "API limit"],
-        ["Raw IoCs Returned", collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0, "before dedupe"],
+        ["Raw IoCs Fetched", collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0, "before filtering"],
+        ["Inside Window", collection.iocs_inside_window ?? responseData.summary?.iocs_inside_window ?? collection.raw_ioc_count ?? 0, "kept"],
         ["Unique IoCs", collection.unique_ioc_count ?? responseData.summary?.unique_ioc_count ?? 0, "deduped"],
         ["Duplicates Removed", collection.duplicates_removed ?? responseData.summary?.duplicates_removed ?? 0, "duplicates"],
         ["Enriched", collection.total_enriched ?? responseData.summary?.total_enriched ?? 0, "IoCs"],
         ["Stopped", stoppedReason, "reason"],
-        ["Earliest Returned", formatTimestampForReport(earliestTimestamp), "timestamp"],
-        ["Latest Returned", formatTimestampForReport(latestTimestamp), "timestamp"],
+        ["Coverage", collection.coverage_status || "n/a", "time window"],
+        ["Earliest Fetched", formatTimestampForReport(earliestFetchedTimestamp), "timestamp"],
+        ["Latest Fetched", formatTimestampForReport(latestFetchedTimestamp), "timestamp"],
+        ["Earliest Kept", formatTimestampForReport(earliestKeptTimestamp), "timestamp"],
+        ["Latest Kept", formatTimestampForReport(latestKeptTimestamp), "timestamp"],
     ];
     const diagnosticsTable = pageDiagnostics.length ? `
         <details class="diagnostics-block">
@@ -2565,18 +2627,29 @@ function RecentExposureCollectionSummary(responseData) {
                 </table>
             </div>
             <p class="compact-note">Stopped reason: ${escapeHtml(String(diagnostics.stopped_reason || collection.stopped_reason || "unknown"))}. Unique IoCs: ${escapeHtml(String(diagnostics.unique_ioc_count ?? collection.unique_ioc_count ?? 0))}. Duplicates removed: ${escapeHtml(String(diagnostics.duplicates_removed ?? collection.duplicates_removed ?? 0))}.</p>
+            <p class="compact-note">Timestamp fields seen: ${escapeHtml(String((diagnostics.timestamp_fields_seen || collection.timestamp_fields_seen || []).join?.(", ") || "none"))}. Stop timestamp field: ${escapeHtml(String(diagnostics.stop_timestamp_field || collection.stop_timestamp_field || "none"))}.</p>
+            <p class="compact-note">Oldest stream event timestamp: ${escapeHtml(String(formatTimestampForReport(diagnostics.oldest_stream_event_timestamp || collection.oldest_stream_event_timestamp)))}. Oldest object metadata timestamp: ${escapeHtml(String(formatTimestampForReport(diagnostics.oldest_object_metadata_timestamp || collection.oldest_object_metadata_timestamp)))}.</p>
+            <p class="compact-note">Ignored old object metadata timestamps: ${escapeHtml(String(diagnostics.ignored_object_metadata_old_timestamp_count ?? collection.ignored_object_metadata_old_timestamp_count ?? 0))}. Items without stream timestamp: ${escapeHtml(String(diagnostics.items_without_stream_timestamp_count ?? collection.items_without_stream_timestamp_count ?? 0))}.</p>
         </details>
     ` : "";
     return `
         <section class="report-section-card">
-            <h2>Recent Stream Sample</h2>
+            <h2>IoC Stream Collection</h2>
+            <p><strong>Mode:</strong> ${escapeHtml(String(modeLabel))}</p>
             <p><strong>Requested pages:</strong> ${escapeHtml(String(collection.requested_pages ?? responseData.technical_details?.request_params?.pages_to_fetch ?? "n/a"))}</p>
             <p><strong>Pages fetched:</strong> ${escapeHtml(String(collection.pages_fetched ?? responseData.summary?.pages_fetched ?? 0))}</p>
+            <p><strong>Max pages:</strong> ${escapeHtml(String(collection.max_pages ?? collection.requested_pages ?? "n/a"))}</p>
             <p><strong>Page size:</strong> ${escapeHtml(String(collection.page_size ?? responseData.summary?.page_size ?? "n/a"))}</p>
-            <p><strong>Raw IoCs returned:</strong> ${escapeHtml(String(collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0))}</p>
+            <p><strong>Raw IoCs fetched:</strong> ${escapeHtml(String(collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0))}</p>
+            <p><strong>IoCs inside selected window:</strong> ${escapeHtml(String(collection.iocs_inside_window ?? responseData.summary?.iocs_inside_window ?? collection.raw_ioc_count ?? 0))}</p>
             <p><strong>Unique IoCs after deduplication:</strong> ${escapeHtml(String(collection.unique_ioc_count ?? responseData.summary?.unique_ioc_count ?? 0))}</p>
-            <p><strong>Earliest returned timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(earliestTimestamp)))}</p>
-            <p><strong>Latest returned timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(latestTimestamp)))}</p>
+            <p><strong>Duplicates removed:</strong> ${escapeHtml(String(collection.duplicates_removed ?? responseData.summary?.duplicates_removed ?? 0))}</p>
+            <p><strong>Stopped reason:</strong> ${escapeHtml(String(stoppedReason))}</p>
+            <p><strong>Earliest fetched timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(earliestFetchedTimestamp)))}</p>
+            <p><strong>Latest fetched timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(latestFetchedTimestamp)))}</p>
+            <p><strong>Earliest kept timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(earliestKeptTimestamp)))}</p>
+            <p><strong>Latest kept timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(latestKeptTimestamp)))}</p>
+            ${collectionMode === "time_window" ? `<p><strong>Coverage status:</strong> ${escapeHtml(String(collection.coverage_status || "unknown"))}</p>` : ""}
             <div class="kpi-grid ioc-summary-grid">
                 ${cards.map(([label, value, hint]) => `
                     <div class="kpi-card">
@@ -2586,7 +2659,7 @@ function RecentExposureCollectionSummary(responseData) {
                     </div>
                 `).join("")}
             </div>
-            <p class="compact-note">IoC Stream is chronological. This report summarizes the recent pages returned by the API, not a guaranteed complete time window.</p>
+            <p class="compact-note">${collectionMode === "time_window" ? "IoC Stream was fetched chronologically and then locally filtered to the selected window." : "IoC Stream is chronological. This report summarizes the recent pages returned by the API, not a guaranteed complete time window."}</p>
             ${warnings.length ? `<div class="diagnostic-warning compact">${warnings.map((warning) => `<p>${escapeHtml(String(warning))}</p>`).join("")}</div>` : ""}
             ${diagnosticsTable}
         </section>
@@ -2624,7 +2697,9 @@ function IocStreamEnrichmentStatus(technicalDetails) {
         ["Enrichment", enabled ? "Enabled" : "Disabled"],
         ["Attempted", enrichment.attempted ?? 0],
         ["Succeeded", enrichment.succeeded ?? 0],
+        ["Skipped", enrichment.skipped ?? 0],
         ["Errors", enrichment.errors ?? 0],
+        ["Too Long URLs", enrichment.skipped_too_long_url ?? 0],
         ["Requested", enrichment.requested_limit ?? 0],
         ["Actual Scope", enrichment.actual_limit ?? 0],
     ];
@@ -2670,7 +2745,7 @@ function TopIndicatorsTable(indicators) {
                 <tbody>
                     ${rows.map((item) => `
                         <tr class="ranking-row">
-                            <td class="name-cell"><strong>${escapeHtml(String(item.value || "Unknown"))}</strong></td>
+                            <td class="name-cell"><strong>${escapeHtml(String(item.display_value || item.value || "Unknown"))}</strong></td>
                             <td class="count-cell">${escapeHtml(String(item.entity_type || "Unknown"))}</td>
                             <td class="count-cell">${renderRiskBadge(item.severity)}</td>
                             <td class="count-cell">${renderIocEnrichmentCell(item)}</td>
@@ -2832,7 +2907,7 @@ function DangerousIndicatorsTable(rows) {
                 <tbody>
                     ${data.map((row) => `
                         <tr class="ranking-row">
-                            <td class="name-cell"><strong>${escapeHtml(String(row.indicator || "Unknown"))}</strong></td>
+                            <td class="name-cell"><strong>${escapeHtml(String(row.display_value || row.indicator || "Unknown"))}</strong></td>
                             <td class="count-cell">${escapeHtml(String(row.type || "Unknown"))}</td>
                             <td class="count-cell">${escapeHtml(String(row.malicious ?? 0))}</td>
                             <td class="count-cell">${escapeHtml(String(row.suspicious ?? 0))}</td>
@@ -3431,6 +3506,9 @@ dtmAlertsButton.addEventListener("click", testDtmAlerts);
 dtmDashboardButton?.addEventListener("click", runDtmDashboard);
 iocStreamButton?.addEventListener("click", runIocStreamReport);
 iocStreamDocxButton?.addEventListener("click", exportIocStreamDocx);
+iocStreamCollectionModeField?.addEventListener("change", syncIocStreamCollectionControls);
+iocStreamPagesToFetchField?.addEventListener("change", syncIocStreamCollectionControls);
+iocStreamTimeWindowField?.addEventListener("change", syncIocStreamCollectionControls);
 intelligenceSearchButton.addEventListener("click", searchGtiIntelligence);
 topTargetsButton?.addEventListener("click", runTopTargetsRanking);
 topTargetsDocxButton?.addEventListener("click", exportTopRankingDocx);
@@ -3478,6 +3556,7 @@ reportForm.addEventListener("submit", generateReport);
 setDownloadState(false);
 syncTopTargetsDeepLookupControls();
 updateTopTargetsEstimatePanel();
+syncIocStreamCollectionControls();
 syncTargetRequirement();
 reportForm.dataset.initialized = "true"; // enable field animations after initial render
 
