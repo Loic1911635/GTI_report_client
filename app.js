@@ -2583,6 +2583,25 @@ function RecentExposureCollectionSummary(responseData) {
     const latestFetchedTimestamp = collection.latest_fetched_timestamp || responseData.summary?.latest_fetched_timestamp || collection.latest_timestamp || responseData.summary?.latest_timestamp;
     const earliestKeptTimestamp = collection.earliest_kept_timestamp || responseData.summary?.earliest_kept_timestamp || collection.earliest_timestamp || responseData.summary?.earliest_timestamp;
     const latestKeptTimestamp = collection.latest_kept_timestamp || responseData.summary?.latest_kept_timestamp || collection.latest_timestamp || responseData.summary?.latest_timestamp;
+    const recommendation = collection.recommendation || diagnostics.recommendation || "";
+    const filteringApplied = collection.time_window_filtering_applied ?? diagnostics.time_window_filtering_applied;
+    const streamTimestampFields = diagnostics.stream_timestamp_fields_seen || collection.stream_timestamp_fields_seen || [];
+    const objectTimestampFields = diagnostics.object_metadata_timestamp_fields_seen || collection.object_metadata_timestamp_fields_seen || [];
+    const rawTimestampDiagnostics = diagnostics.raw_item_timestamp_diagnostics || collection.raw_item_timestamp_diagnostics || [];
+    const timestampDiagnosticRows = Array.isArray(rawTimestampDiagnostics)
+        ? rawTimestampDiagnostics.flatMap((item) => {
+            const dateFields = Array.isArray(item.date_fields) ? item.date_fields : [];
+            return dateFields.map((field) => ({
+                id: item.id,
+                type: item.type,
+                path: field.path,
+                parsedDatetime: field.parsed_datetime,
+                classification: field.classification,
+                accepted: field.accepted_as_stream_timestamp,
+                rejectedObjectMetadata: field.rejected_as_object_metadata,
+            }));
+        })
+        : [];
     const cards = [
         ["Collection Mode", modeLabel, "mode"],
         ["Requested Pages", collection.requested_pages ?? responseData.technical_details?.request_params?.pages_to_fetch ?? "n/a", "input"],
@@ -2627,9 +2646,44 @@ function RecentExposureCollectionSummary(responseData) {
                 </table>
             </div>
             <p class="compact-note">Stopped reason: ${escapeHtml(String(diagnostics.stopped_reason || collection.stopped_reason || "unknown"))}. Unique IoCs: ${escapeHtml(String(diagnostics.unique_ioc_count ?? collection.unique_ioc_count ?? 0))}. Duplicates removed: ${escapeHtml(String(diagnostics.duplicates_removed ?? collection.duplicates_removed ?? 0))}.</p>
+            <p class="compact-note">Raw IoCs: ${escapeHtml(String(diagnostics.raw_ioc_count ?? collection.raw_ioc_count ?? 0))}. Items with stream timestamp: ${escapeHtml(String(diagnostics.items_with_stream_timestamp ?? collection.items_with_stream_timestamp ?? 0))}. Items without stream timestamp: ${escapeHtml(String(diagnostics.items_without_stream_timestamp ?? collection.items_without_stream_timestamp ?? collection.items_without_stream_timestamp_count ?? 0))}.</p>
+            <p class="compact-note">Stream timestamp fields seen: ${escapeHtml(String(streamTimestampFields.join?.(", ") || "none"))}. Object metadata timestamp fields seen: ${escapeHtml(String(objectTimestampFields.join?.(", ") || "none"))}.</p>
             <p class="compact-note">Timestamp fields seen: ${escapeHtml(String((diagnostics.timestamp_fields_seen || collection.timestamp_fields_seen || []).join?.(", ") || "none"))}. Stop timestamp field: ${escapeHtml(String(diagnostics.stop_timestamp_field || collection.stop_timestamp_field || "none"))}.</p>
             <p class="compact-note">Oldest stream event timestamp: ${escapeHtml(String(formatTimestampForReport(diagnostics.oldest_stream_event_timestamp || collection.oldest_stream_event_timestamp)))}. Oldest object metadata timestamp: ${escapeHtml(String(formatTimestampForReport(diagnostics.oldest_object_metadata_timestamp || collection.oldest_object_metadata_timestamp)))}.</p>
             <p class="compact-note">Ignored old object metadata timestamps: ${escapeHtml(String(diagnostics.ignored_object_metadata_old_timestamp_count ?? collection.ignored_object_metadata_old_timestamp_count ?? 0))}. Items without stream timestamp: ${escapeHtml(String(diagnostics.items_without_stream_timestamp_count ?? collection.items_without_stream_timestamp_count ?? 0))}.</p>
+        </details>
+    ` : "";
+    const timestampDiagnosticsTable = timestampDiagnosticRows.length ? `
+        <details class="diagnostics-block">
+            <summary>IoC Stream timestamp field diagnostics</summary>
+            <div class="table-scroll">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>IoC ID</th>
+                            <th>Type</th>
+                            <th>Field path</th>
+                            <th>Parsed datetime</th>
+                            <th>Classification</th>
+                            <th>Stream</th>
+                            <th>Object metadata</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${timestampDiagnosticRows.map((row) => `
+                            <tr>
+                                <td>${escapeHtml(String(row.id || "n/a"))}</td>
+                                <td>${escapeHtml(String(row.type || "n/a"))}</td>
+                                <td>${escapeHtml(String(row.path || "n/a"))}</td>
+                                <td>${escapeHtml(String(formatTimestampForReport(row.parsedDatetime)))}</td>
+                                <td>${escapeHtml(String(row.classification || "unknown"))}</td>
+                                <td>${escapeHtml(String(Boolean(row.accepted)))}</td>
+                                <td>${escapeHtml(String(Boolean(row.rejectedObjectMetadata)))}</td>
+                            </tr>
+                        `).join("")}
+                    </tbody>
+                </table>
+            </div>
         </details>
     ` : "";
     return `
@@ -2650,6 +2704,8 @@ function RecentExposureCollectionSummary(responseData) {
             <p><strong>Earliest kept timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(earliestKeptTimestamp)))}</p>
             <p><strong>Latest kept timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(latestKeptTimestamp)))}</p>
             ${collectionMode === "time_window" ? `<p><strong>Coverage status:</strong> ${escapeHtml(String(collection.coverage_status || "unknown"))}</p>` : ""}
+            ${collectionMode === "time_window" && filteringApplied !== undefined ? `<p><strong>Time-window filtering applied:</strong> ${escapeHtml(String(Boolean(filteringApplied)))}</p>` : ""}
+            ${recommendation ? `<p><strong>Recommendation:</strong> ${escapeHtml(String(recommendation))}</p>` : ""}
             <div class="kpi-grid ioc-summary-grid">
                 ${cards.map(([label, value, hint]) => `
                     <div class="kpi-card">
@@ -2659,9 +2715,10 @@ function RecentExposureCollectionSummary(responseData) {
                     </div>
                 `).join("")}
             </div>
-            <p class="compact-note">${collectionMode === "time_window" ? "IoC Stream was fetched chronologically and then locally filtered to the selected window." : "IoC Stream is chronological. This report summarizes the recent pages returned by the API, not a guaranteed complete time window."}</p>
+            <p class="compact-note">${collectionMode === "time_window" ? (filteringApplied === false ? "IoC Stream was fetched chronologically, but local time-window filtering was not applied because no stream notification timestamps were exposed." : "IoC Stream was fetched chronologically and then locally filtered to the selected window.") : "IoC Stream is chronological. This report summarizes the recent pages returned by the API, not a guaranteed complete time window."}</p>
             ${warnings.length ? `<div class="diagnostic-warning compact">${warnings.map((warning) => `<p>${escapeHtml(String(warning))}</p>`).join("")}</div>` : ""}
             ${diagnosticsTable}
+            ${timestampDiagnosticsTable}
         </section>
     `;
 }

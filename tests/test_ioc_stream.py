@@ -426,13 +426,113 @@ class IocStreamReportTests(unittest.TestCase):
             result["collection"]["ignored_object_metadata_old_timestamp_count"],
             2,
         )
+        self.assertEqual(result["collection"]["items_with_stream_timestamp"], 2)
+        self.assertEqual(result["collection"]["items_without_stream_timestamp"], 0)
+        self.assertEqual(result["collection"]["stream_timestamp_fields_seen"], ["matched_date"])
+        self.assertEqual(
+            result["collection"]["object_metadata_timestamp_fields_seen"],
+            ["creation_date", "first_seen"],
+        )
         self.assertEqual(result["collection"]["stop_timestamp_field"], None)
         self.assertIn("matched_date", result["collection"]["timestamp_fields_seen"])
         self.assertIn("creation_date", result["collection"]["timestamp_fields_seen"])
         self.assertIn("first_seen", result["collection"]["timestamp_fields_seen"])
 
     @patch("backend.gti_client._probe_json_endpoint")
-    def test_fetch_ioc_stream_time_window_without_stream_timestamps_is_unknown(
+    def test_fetch_ioc_stream_time_window_uses_recursive_matched_on_fields(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.side_effect = [
+            {
+                "http_status": 200,
+                "response_headers": {},
+                "raw_json": {
+                    "data": [
+                        {
+                            "id": "inside.example",
+                            "type": "domain",
+                            "attributes": {
+                                "gti_ui": {
+                                    "matched_on": "2026-05-20T10:00:00Z",
+                                },
+                                "last_seen_itw_date": "2001-01-01T00:00:00Z",
+                            },
+                        }
+                    ],
+                    "meta": {"next_cursor": "cursor-1"},
+                },
+            },
+            {
+                "http_status": 200,
+                "response_headers": {},
+                "raw_json": {
+                    "data": [
+                        {
+                            "id": "before-window.example",
+                            "type": "domain",
+                            "attributes": {
+                                "details": {
+                                    "matched_at": "2026-05-13T10:00:00Z",
+                                }
+                            },
+                        }
+                    ],
+                },
+            },
+        ]
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="time_window",
+            time_window="custom",
+            start_date="2026-05-14",
+            end_date="2026-05-21",
+            max_pages=5,
+        )
+
+        self.assertEqual(mock_probe.call_count, 2)
+        self.assertEqual(result["collection"]["stopped_reason"], "start_date_reached")
+        self.assertEqual(result["collection"]["coverage_status"], "complete")
+        self.assertEqual(result["collection"]["raw_ioc_count"], 2)
+        self.assertEqual(result["total_collected"], 1)
+        self.assertEqual(result["raw_data"]["data"][0]["id"], "inside.example")
+        self.assertEqual(
+            result["collection"]["earliest_fetched_timestamp"],
+            "2026-05-13T10:00:00+00:00",
+        )
+        self.assertEqual(
+            result["collection"]["latest_fetched_timestamp"],
+            "2026-05-20T10:00:00+00:00",
+        )
+        self.assertEqual(
+            result["collection"]["stream_timestamp_fields_seen"],
+            ["matched_at", "matched_on"],
+        )
+        self.assertEqual(
+            result["collection"]["object_metadata_timestamp_fields_seen"],
+            ["last_seen_itw_date"],
+        )
+
+        raw_diagnostics = result["collection"]["raw_item_timestamp_diagnostics"]
+        self.assertEqual(len(raw_diagnostics), 2)
+        first_fields = {
+            row["path"]: row
+            for row in raw_diagnostics[0]["date_fields"]
+        }
+        self.assertTrue(
+            first_fields["attributes.gti_ui.matched_on"][
+                "accepted_as_stream_timestamp"
+            ]
+        )
+        self.assertTrue(
+            first_fields["attributes.last_seen_itw_date"][
+                "rejected_as_object_metadata"
+            ]
+        )
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_time_window_without_stream_timestamps_is_unavailable(
         self,
         mock_probe,
     ) -> None:
@@ -447,6 +547,7 @@ class IocStreamReportTests(unittest.TestCase):
                         "attributes": {
                             "creation_date": "2001-01-01T00:00:00Z",
                             "first_submission_date": "2004-01-01T00:00:00Z",
+                            "last_seen_itw_date": "2005-01-01T00:00:00Z",
                         },
                     }
                 ]
@@ -462,14 +563,31 @@ class IocStreamReportTests(unittest.TestCase):
             max_pages=5,
         )
 
-        self.assertEqual(result["collection"]["stopped_reason"], "no_more_pages")
-        self.assertEqual(result["collection"]["coverage_status"], "unknown")
+        self.assertEqual(result["collection"]["stopped_reason"], "no_stream_timestamps")
+        self.assertEqual(result["collection"]["coverage_status"], "unavailable")
         self.assertEqual(result["collection"]["raw_ioc_count"], 1)
-        self.assertEqual(result["collection"]["iocs_inside_window"], 0)
+        self.assertEqual(result["total_collected"], 1)
+        self.assertEqual(len(result["raw_data"]["data"]), 1)
+        self.assertFalse(result["collection"]["time_window_filtering_applied"])
+        self.assertEqual(
+            result["collection"]["recommendation"],
+            "Use Recent chronological sample mode for this dataset.",
+        )
+        self.assertEqual(result["collection"]["items_with_stream_timestamp"], 0)
+        self.assertEqual(result["collection"]["items_without_stream_timestamp"], 1)
         self.assertEqual(result["collection"]["items_without_stream_timestamp_count"], 1)
+        self.assertEqual(result["collection"]["stream_timestamp_fields_seen"], [])
+        self.assertEqual(
+            result["collection"]["object_metadata_timestamp_fields_seen"],
+            ["creation_date", "first_submission_date", "last_seen_itw_date"],
+        )
         self.assertEqual(
             result["collection"]["oldest_object_metadata_timestamp"],
             "2001-01-01T00:00:00+00:00",
+        )
+        self.assertIn(
+            "GTI returned IoCs, but no usable stream notification timestamps were exposed. Time-window filtering could not be applied safely.",
+            result["warnings"],
         )
 
     def test_stream_event_datetime_keeps_object_created_at_separate(self) -> None:

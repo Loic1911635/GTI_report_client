@@ -40,9 +40,16 @@ MAX_URL_ENRICHMENT_INPUT_BYTES = 350
 IOC_STREAM_COLLECTION_MODES = {"recent_pages", "time_window"}
 IOC_STREAM_TIME_WINDOWS = {"last_24h", "last_7d", "last_30d", "custom"}
 IOC_STREAM_EVENT_TIMESTAMP_FIELDS = (
+    "matched_on",
+    "matched_at",
     "matched_date",
+    "match_date",
+    "match_time",
     "notification_date",
+    "notification_time",
     "last_notification_date",
+    "ioc_stream_date",
+    "ioc_stream_timestamp",
 )
 IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS = (
     "creation_date",
@@ -50,6 +57,7 @@ IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS = (
     "first_submission_date",
     "last_analysis_date",
     "last_modification_date",
+    "last_seen_itw_date",
 )
 IOC_STREAM_CREATED_AT_NOTIFICATION_TYPES = {
     "ioc_stream",
@@ -62,6 +70,13 @@ IOC_STREAM_DISPLAY_VALUE_MAX_LENGTH = 120
 IOC_STREAM_SAMPLE_WARNING = (
     "IoC Stream is chronological. This report summarizes the recent pages returned "
     "by the API, not a guaranteed complete time window."
+)
+IOC_STREAM_NO_TIMESTAMPS_WARNING = (
+    "GTI returned IoCs, but no usable stream notification timestamps were exposed. "
+    "Time-window filtering could not be applied safely."
+)
+IOC_STREAM_RECENT_MODE_RECOMMENDATION = (
+    "Use Recent chronological sample mode for this dataset."
 )
 DEFAULT_INTELLIGENCE_SEARCH_LIMIT = 10
 MAX_INTELLIGENCE_SEARCH_LIMIT = 40
@@ -631,7 +646,12 @@ def fetch_ioc_stream(
             "warnings": (
                 [IOC_STREAM_SAMPLE_WARNING]
                 if normalized_collection_mode == "recent_pages"
-                else []
+                else (
+                    [IOC_STREAM_NO_TIMESTAMPS_WARNING]
+                    if collection_metadata.get("stopped_reason")
+                    == "no_stream_timestamps"
+                    else []
+                )
             ),
         }
 
@@ -776,17 +796,29 @@ def fetch_ioc_stream(
     ):
         stopped_reason = "max_pages_reached"
 
-    kept_items = (
-        [
+    time_window_without_stream_timestamps = (
+        normalized_collection_mode == "time_window"
+        and bool(fetched_items)
+        and _oldest_stream_event_timestamp(fetched_items) is None
+    )
+    if time_window_without_stream_timestamps:
+        stopped_reason = "no_stream_timestamps"
+        warnings.append(IOC_STREAM_NO_TIMESTAMPS_WARNING)
+
+    if time_window_without_stream_timestamps:
+        kept_items = list(fetched_items)
+    elif (
+        normalized_collection_mode == "time_window"
+        and start_datetime is not None
+        and end_datetime is not None
+    ):
+        kept_items = [
             item
             for item in fetched_items
             if _ioc_item_is_in_time_window(item, start_datetime, end_datetime)
         ]
-        if normalized_collection_mode == "time_window"
-        and start_datetime is not None
-        and end_datetime is not None
-        else list(fetched_items)
-    )
+    else:
+        kept_items = list(fetched_items)
     collection_metadata = _build_ioc_stream_collection_metadata(
         fetched_items=fetched_items,
         kept_items=kept_items,
@@ -1073,8 +1105,36 @@ def build_ioc_stream_report(
         "duplicates_removed": duplicate_count,
         "unique_ioc_count": len(indicators),
         "raw_ioc_count": collection_metadata.get("raw_ioc_count", len(raw_indicators)),
-        "iocs_inside_window": len(raw_indicators),
+        "iocs_inside_window": collection_metadata.get(
+            "iocs_inside_window",
+            len(raw_indicators),
+        ),
         "stopped_reason": collection_metadata.get("stopped_reason", "unknown"),
+        "coverage_status": collection_metadata.get("coverage_status"),
+        "recommendation": collection_metadata.get("recommendation"),
+        "time_window_filtering_applied": collection_metadata.get(
+            "time_window_filtering_applied"
+        ),
+        "items_with_stream_timestamp": collection_metadata.get(
+            "items_with_stream_timestamp",
+            0,
+        ),
+        "items_without_stream_timestamp": collection_metadata.get(
+            "items_without_stream_timestamp",
+            collection_metadata.get("items_without_stream_timestamp_count", 0),
+        ),
+        "stream_timestamp_fields_seen": collection_metadata.get(
+            "stream_timestamp_fields_seen",
+            [],
+        ),
+        "object_metadata_timestamp_fields_seen": collection_metadata.get(
+            "object_metadata_timestamp_fields_seen",
+            [],
+        ),
+        "raw_item_timestamp_diagnostics": collection_metadata.get(
+            "raw_item_timestamp_diagnostics",
+            [],
+        ),
         "timestamp_fields_seen": collection_metadata.get("timestamp_fields_seen", []),
         "stop_timestamp_field": collection_metadata.get("stop_timestamp_field"),
         "oldest_stream_event_timestamp": collection_metadata.get(
@@ -1098,7 +1158,7 @@ def build_ioc_stream_report(
     collection_metadata["duplicate_count"] = duplicate_count
     collection_metadata["duplicates_removed"] = duplicate_count
     collection_metadata.setdefault("raw_ioc_count", len(raw_indicators))
-    collection_metadata["iocs_inside_window"] = len(raw_indicators)
+    collection_metadata.setdefault("iocs_inside_window", len(raw_indicators))
     collection_metadata["page_diagnostics"] = diagnostics["page_diagnostics"]
     collection_metadata.setdefault(
         "pages_fetched",
@@ -1148,7 +1208,10 @@ def build_ioc_stream_report(
         "page_size": collection_metadata.get("page_size", IOC_STREAM_API_PAGE_LIMIT),
         "total_enriched": enrichment_succeeded,
         "raw_ioc_count": collection_metadata.get("raw_ioc_count", len(raw_indicators)),
-        "iocs_inside_window": len(raw_indicators),
+        "iocs_inside_window": collection_metadata.get(
+            "iocs_inside_window",
+            len(raw_indicators),
+        ),
         "unique_ioc_count": len(indicators),
         "duplicates_removed": duplicate_count,
         "earliest_timestamp": collection_metadata.get("earliest_timestamp"),
@@ -3620,31 +3683,36 @@ def _filter_mock_ioc_stream_payload(
             continue
         fetched_items.append(item)
 
-    kept_items = (
-        [
-            item
-            for item in fetched_items
-            if _ioc_item_is_in_time_window(
-                item,
-                time_window_metadata["start_datetime"],
-                time_window_metadata["end_datetime"],
-            )
-        ]
-        if collection_mode == "time_window" and time_window_metadata
-        else list(fetched_items)
-    )
     stopped_reason = "no_more_pages"
     stop_timestamp_field = None
     if collection_mode == "time_window" and time_window_metadata:
         oldest_stream_timestamp, oldest_stream_field = (
             _oldest_stream_event_timestamp_with_field(fetched_items)
         )
-        if (
+        if oldest_stream_timestamp is None and fetched_items:
+            stopped_reason = "no_stream_timestamps"
+        elif (
             oldest_stream_timestamp is not None
             and oldest_stream_timestamp <= time_window_metadata["start_datetime"]
         ):
             stopped_reason = "start_date_reached"
             stop_timestamp_field = oldest_stream_field
+
+    if collection_mode == "time_window" and time_window_metadata:
+        if stopped_reason == "no_stream_timestamps":
+            kept_items = list(fetched_items)
+        else:
+            kept_items = [
+                item
+                for item in fetched_items
+                if _ioc_item_is_in_time_window(
+                    item,
+                    time_window_metadata["start_datetime"],
+                    time_window_metadata["end_datetime"],
+                )
+            ]
+    else:
+        kept_items = list(fetched_items)
 
     collection_metadata = _build_ioc_stream_collection_metadata(
         fetched_items=fetched_items,
@@ -3675,15 +3743,9 @@ def extract_object_metadata_datetime(item: dict[str, Any]) -> datetime | None:
 
 
 def _extract_stream_event_datetime_value(item: dict[str, Any]) -> Any:
-    fields = _ioc_item_fields(item)
-    for field_name in IOC_STREAM_EVENT_TIMESTAMP_FIELDS:
-        value = fields.get(field_name)
-        if _parse_ioc_stream_datetime(value) is not None:
-            return value
-
-    value = fields.get("created_at")
-    if _created_at_is_stream_event(item, fields) and _parse_ioc_stream_datetime(value):
-        return value
+    for candidate in _find_ioc_date_fields(item):
+        if candidate["classification"] == "stream_timestamp":
+            return candidate["value"]
 
     return None
 
@@ -3691,15 +3753,12 @@ def _extract_stream_event_datetime_value(item: dict[str, Any]) -> Any:
 def _extract_stream_event_datetime_with_field(
     item: dict[str, Any],
 ) -> tuple[datetime | None, str | None]:
-    fields = _ioc_item_fields(item)
-    for field_name in IOC_STREAM_EVENT_TIMESTAMP_FIELDS:
-        item_datetime = _parse_ioc_stream_datetime(fields.get(field_name))
-        if item_datetime is not None:
-            return item_datetime, field_name
-
-    created_at_datetime = _parse_ioc_stream_datetime(fields.get("created_at"))
-    if created_at_datetime is not None and _created_at_is_stream_event(item, fields):
-        return created_at_datetime, "created_at"
+    for candidate in _find_ioc_date_fields(item):
+        if candidate["classification"] != "stream_timestamp":
+            continue
+        item_datetime = candidate.get("parsed_datetime")
+        if isinstance(item_datetime, datetime):
+            return item_datetime, str(candidate.get("key") or "")
 
     return None, None
 
@@ -3707,15 +3766,12 @@ def _extract_stream_event_datetime_with_field(
 def _extract_object_metadata_datetime_with_field(
     item: dict[str, Any],
 ) -> tuple[datetime | None, str | None]:
-    fields = _ioc_item_fields(item)
-    for field_name in IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS:
-        item_datetime = _parse_ioc_stream_datetime(fields.get(field_name))
-        if item_datetime is not None:
-            return item_datetime, field_name
-
-    created_at_datetime = _parse_ioc_stream_datetime(fields.get("created_at"))
-    if created_at_datetime is not None and not _created_at_is_stream_event(item, fields):
-        return created_at_datetime, "created_at"
+    for candidate in _find_ioc_date_fields(item):
+        if candidate["classification"] != "object_metadata":
+            continue
+        item_datetime = candidate.get("parsed_datetime")
+        if isinstance(item_datetime, datetime):
+            return item_datetime, str(candidate.get("key") or "")
 
     return None, None
 
@@ -3724,6 +3780,122 @@ def _ioc_item_fields(item: dict[str, Any]) -> dict[str, Any]:
     attributes = item.get("attributes", {})
     normalized_attributes = attributes if isinstance(attributes, dict) else {}
     return _merge_item_with_attributes(item, normalized_attributes)
+
+
+def _normalize_ioc_date_key(key: Any) -> str:
+    return str(key or "").strip().casefold().replace("-", "_")
+
+
+def _is_ioc_date_like_key(key: Any) -> bool:
+    normalized_key = _normalize_ioc_date_key(key)
+    if not normalized_key:
+        return False
+    if normalized_key in {
+        *IOC_STREAM_EVENT_TIMESTAMP_FIELDS,
+        *IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS,
+        "created_at",
+    }:
+        return True
+    return any(token in normalized_key for token in ("date", "time", "timestamp"))
+
+
+def _join_ioc_date_path(parent_path: str, key: Any) -> str:
+    key_text = str(key)
+    return f"{parent_path}.{key_text}" if parent_path else key_text
+
+
+def _find_ioc_date_fields(item: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return date-like fields with stream/object classification for diagnostics."""
+
+    fields = _ioc_item_fields(item)
+    found_fields: list[dict[str, Any]] = []
+
+    def visit(value: Any, path: str = "") -> None:
+        if isinstance(value, dict):
+            for raw_key, child_value in value.items():
+                child_path = _join_ioc_date_path(path, raw_key)
+                normalized_key = _normalize_ioc_date_key(raw_key)
+                parsed_datetime = (
+                    _parse_ioc_stream_datetime(child_value)
+                    if _is_ioc_date_like_key(raw_key)
+                    else None
+                )
+                if parsed_datetime is not None:
+                    classification = "other_date"
+                    accepted_as_stream_timestamp = False
+                    if normalized_key in IOC_STREAM_EVENT_TIMESTAMP_FIELDS:
+                        classification = "stream_timestamp"
+                        accepted_as_stream_timestamp = True
+                    elif normalized_key == "created_at":
+                        if _created_at_is_stream_event(item, fields):
+                            classification = "stream_timestamp"
+                            accepted_as_stream_timestamp = True
+                        else:
+                            classification = "object_metadata"
+                    elif normalized_key in IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS:
+                        classification = "object_metadata"
+
+                    found_fields.append(
+                        {
+                            "key": normalized_key,
+                            "path": child_path,
+                            "value": child_value,
+                            "parsed_datetime": parsed_datetime,
+                            "classification": classification,
+                            "accepted_as_stream_timestamp": accepted_as_stream_timestamp,
+                            "rejected_as_object_metadata": (
+                                classification == "object_metadata"
+                            ),
+                        }
+                    )
+                visit(child_value, child_path)
+        elif isinstance(value, list):
+            for index, child_value in enumerate(value):
+                child_path = f"{path}[{index}]" if path else f"[{index}]"
+                visit(child_value, child_path)
+
+    visit(item)
+    return found_fields
+
+
+def _public_ioc_date_field_diagnostic(candidate: dict[str, Any]) -> dict[str, Any]:
+    parsed_datetime = candidate.get("parsed_datetime")
+    return {
+        "field": candidate.get("key"),
+        "path": candidate.get("path"),
+        "value": _stringify_value(candidate.get("value")),
+        "parsed_datetime": (
+            parsed_datetime.isoformat()
+            if isinstance(parsed_datetime, datetime)
+            else None
+        ),
+        "accepted_as_stream_timestamp": bool(
+            candidate.get("accepted_as_stream_timestamp")
+        ),
+        "rejected_as_object_metadata": bool(
+            candidate.get("rejected_as_object_metadata")
+        ),
+        "classification": candidate.get("classification"),
+    }
+
+
+def _build_ioc_stream_raw_item_timestamp_diagnostics(
+    items: list[dict[str, Any]],
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    for item in items[:limit]:
+        diagnostics.append(
+            {
+                "id": _stringify_value(item.get("id")),
+                "type": _stringify_value(item.get("type")),
+                "date_fields": [
+                    _public_ioc_date_field_diagnostic(candidate)
+                    for candidate in _find_ioc_date_fields(item)
+                ],
+            }
+        )
+    return diagnostics
 
 
 def _created_at_is_stream_event(item: dict[str, Any], fields: dict[str, Any]) -> bool:
@@ -3878,9 +4050,13 @@ def _object_metadata_timestamps_with_fields(
 ) -> list[tuple[datetime, str]]:
     timestamps: list[tuple[datetime, str]] = []
     for item in items:
-        item_datetime, field_name = _extract_object_metadata_datetime_with_field(item)
-        if item_datetime is not None and field_name:
-            timestamps.append((item_datetime, field_name))
+        for candidate in _find_ioc_date_fields(item):
+            if candidate["classification"] != "object_metadata":
+                continue
+            item_datetime = candidate.get("parsed_datetime")
+            field_name = candidate.get("key")
+            if isinstance(item_datetime, datetime) and field_name:
+                timestamps.append((item_datetime, str(field_name)))
     return timestamps
 
 
@@ -3917,10 +4093,12 @@ def _ioc_stream_coverage_status(
     if collection_mode != "time_window":
         return None
     if not fetched_items or not time_window_metadata:
-        return "unknown"
+        return "unavailable"
+    if stopped_reason == "no_stream_timestamps":
+        return "unavailable"
     oldest_timestamp = _oldest_stream_event_timestamp(fetched_items)
     if oldest_timestamp is None:
-        return "unknown"
+        return "unavailable"
     if oldest_timestamp <= time_window_metadata["start_datetime"]:
         return "complete"
     if stopped_reason == "max_pages_reached":
@@ -3949,12 +4127,23 @@ def _build_ioc_stream_timestamp_diagnostics(
     oldest_object_timestamp = (
         min((item_datetime for item_datetime, _ in object_timestamps), default=None)
     )
+    stream_timestamp_fields_seen: set[str] = {
+        field_name for _, field_name in stream_timestamps if field_name
+    }
+    object_metadata_timestamp_fields_seen: set[str] = {
+        field_name for _, field_name in object_timestamps if field_name
+    }
+    for item in fetched_items:
+        for candidate in _find_ioc_date_fields(item):
+            field_name = str(candidate.get("key") or "")
+            if not field_name:
+                continue
+            if candidate["classification"] == "stream_timestamp":
+                stream_timestamp_fields_seen.add(field_name)
+            elif candidate["classification"] == "object_metadata":
+                object_metadata_timestamp_fields_seen.add(field_name)
     timestamp_fields_seen = sorted(
-        {
-            field_name
-            for _, field_name in [*stream_timestamps, *object_timestamps]
-            if field_name
-        }
+        stream_timestamp_fields_seen | object_metadata_timestamp_fields_seen
     )
     start_datetime = (
         time_window_metadata.get("start_datetime") if time_window_metadata else None
@@ -3970,6 +4159,13 @@ def _build_ioc_stream_timestamp_diagnostics(
                 ignored_old_metadata_count += 1
 
     return {
+        "raw_ioc_count": len(fetched_items),
+        "items_with_stream_timestamp": len(stream_timestamps),
+        "items_without_stream_timestamp": len(fetched_items) - len(stream_timestamps),
+        "stream_timestamp_fields_seen": sorted(stream_timestamp_fields_seen),
+        "object_metadata_timestamp_fields_seen": sorted(
+            object_metadata_timestamp_fields_seen
+        ),
         "timestamp_fields_seen": timestamp_fields_seen,
         "stop_timestamp_field": stop_timestamp_field,
         "oldest_stream_event_timestamp": (
@@ -3981,6 +4177,9 @@ def _build_ioc_stream_timestamp_diagnostics(
         "ignored_object_metadata_old_timestamp_count": ignored_old_metadata_count,
         "items_without_stream_timestamp_count": (
             len(fetched_items) - len(stream_timestamps)
+        ),
+        "raw_item_timestamp_diagnostics": (
+            _build_ioc_stream_raw_item_timestamp_diagnostics(fetched_items)
         ),
     }
 
@@ -4000,6 +4199,10 @@ def _build_ioc_stream_collection_metadata(
     latest_fetched_timestamp = _newest_stream_event_timestamp(fetched_items)
     earliest_kept_timestamp = _oldest_stream_event_timestamp(kept_items)
     latest_kept_timestamp = _newest_stream_event_timestamp(kept_items)
+    time_window_filtering_applied = (
+        collection_mode == "time_window"
+        and stopped_reason != "no_stream_timestamps"
+    )
     coverage_status = _ioc_stream_coverage_status(
         collection_mode,
         stopped_reason,
@@ -4018,6 +4221,12 @@ def _build_ioc_stream_collection_metadata(
         "raw_ioc_count": len(fetched_items),
         "raw_iocs_fetched": len(fetched_items),
         "iocs_inside_window": len(kept_items),
+        "time_window_filtering_applied": time_window_filtering_applied,
+        "recommendation": (
+            IOC_STREAM_RECENT_MODE_RECOMMENDATION
+            if stopped_reason == "no_stream_timestamps"
+            else None
+        ),
         "total_enriched": 0,
         "requested_pages": requested_pages,
         "max_pages": requested_pages,
