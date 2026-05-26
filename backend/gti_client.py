@@ -59,6 +59,11 @@ IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS = (
     "last_modification_date",
     "last_seen_itw_date",
 )
+IOC_STREAM_EXCLUDED_DATE_DIAGNOSTIC_FIELDS = {
+    "engine_update",
+    "timeout",
+    "confirmed_timeout",
+}
 IOC_STREAM_CREATED_AT_NOTIFICATION_TYPES = {
     "ioc_stream",
     "ioc_stream_notification",
@@ -665,7 +670,6 @@ def fetch_ioc_stream(
     final_status_code = 0
     warnings: list[str] = []
     stopped_reason = "requested_pages_reached"
-    stop_timestamp_field: str | None = None
     seen_page_tokens: set[str] = set()
 
     for page_number in range(1, normalized_pages_to_fetch + 1):
@@ -756,18 +760,6 @@ def fetch_ioc_stream(
             }
         )
 
-        if normalized_collection_mode == "time_window" and start_datetime is not None:
-            oldest_stream_timestamp, oldest_stream_field = (
-                _oldest_stream_event_timestamp_with_field(fetched_items)
-            )
-            if (
-                oldest_stream_timestamp is not None
-                and oldest_stream_timestamp <= start_datetime
-            ):
-                stopped_reason = "start_date_reached"
-                stop_timestamp_field = oldest_stream_field
-                break
-
         if not next_cursor or not page_items:
             if next_link_url:
                 page_token = next_link_url
@@ -789,12 +781,6 @@ def fetch_ioc_stream(
         seen_page_tokens.add(page_token)
         current_url = VIRUSTOTAL_IOC_STREAM_URL
         current_cursor = next_cursor
-
-    if (
-        normalized_collection_mode == "time_window"
-        and stopped_reason == "requested_pages_reached"
-    ):
-        stopped_reason = "max_pages_reached"
 
     time_window_without_stream_timestamps = (
         normalized_collection_mode == "time_window"
@@ -828,7 +814,6 @@ def fetch_ioc_stream(
         stopped_reason=stopped_reason,
         collection_mode=normalized_collection_mode,
         time_window_metadata=time_window_metadata,
-        stop_timestamp_field=stop_timestamp_field,
     )
     collection_metadata["page_diagnostics"] = page_diagnostics
     warnings = _ioc_stream_warnings(normalized_collection_mode, warnings)
@@ -1109,6 +1094,10 @@ def build_ioc_stream_report(
             "iocs_inside_window",
             len(raw_indicators),
         ),
+        "iocs_inside_selected_window": collection_metadata.get(
+            "iocs_inside_selected_window",
+            collection_metadata.get("iocs_inside_window", len(raw_indicators)),
+        ),
         "stopped_reason": collection_metadata.get("stopped_reason", "unknown"),
         "coverage_status": collection_metadata.get("coverage_status"),
         "recommendation": collection_metadata.get("recommendation"),
@@ -1155,10 +1144,16 @@ def build_ioc_stream_report(
     collection_metadata["total_collected"] = len(indicators)
     collection_metadata["total_enriched"] = enrichment_succeeded
     collection_metadata["unique_ioc_count"] = len(indicators)
+    collection_metadata["unique_iocs_after_deduplication"] = len(indicators)
     collection_metadata["duplicate_count"] = duplicate_count
     collection_metadata["duplicates_removed"] = duplicate_count
     collection_metadata.setdefault("raw_ioc_count", len(raw_indicators))
+    collection_metadata.setdefault("raw_iocs_fetched", len(raw_indicators))
     collection_metadata.setdefault("iocs_inside_window", len(raw_indicators))
+    collection_metadata.setdefault(
+        "iocs_inside_selected_window",
+        collection_metadata.get("iocs_inside_window", len(raw_indicators)),
+    )
     collection_metadata["page_diagnostics"] = diagnostics["page_diagnostics"]
     collection_metadata.setdefault(
         "pages_fetched",
@@ -1212,7 +1207,12 @@ def build_ioc_stream_report(
             "iocs_inside_window",
             len(raw_indicators),
         ),
+        "iocs_inside_selected_window": collection_metadata.get(
+            "iocs_inside_selected_window",
+            collection_metadata.get("iocs_inside_window", len(raw_indicators)),
+        ),
         "unique_ioc_count": len(indicators),
+        "unique_iocs_after_deduplication": len(indicators),
         "duplicates_removed": duplicate_count,
         "earliest_timestamp": collection_metadata.get("earliest_timestamp"),
         "latest_timestamp": collection_metadata.get("latest_timestamp"),
@@ -3684,19 +3684,9 @@ def _filter_mock_ioc_stream_payload(
         fetched_items.append(item)
 
     stopped_reason = "no_more_pages"
-    stop_timestamp_field = None
     if collection_mode == "time_window" and time_window_metadata:
-        oldest_stream_timestamp, oldest_stream_field = (
-            _oldest_stream_event_timestamp_with_field(fetched_items)
-        )
-        if oldest_stream_timestamp is None and fetched_items:
+        if _oldest_stream_event_timestamp(fetched_items) is None and fetched_items:
             stopped_reason = "no_stream_timestamps"
-        elif (
-            oldest_stream_timestamp is not None
-            and oldest_stream_timestamp <= time_window_metadata["start_datetime"]
-        ):
-            stopped_reason = "start_date_reached"
-            stop_timestamp_field = oldest_stream_field
 
     if collection_mode == "time_window" and time_window_metadata:
         if stopped_reason == "no_stream_timestamps":
@@ -3723,7 +3713,6 @@ def _filter_mock_ioc_stream_payload(
         stopped_reason=stopped_reason,
         collection_mode=collection_mode,
         time_window_metadata=time_window_metadata,
-        stop_timestamp_field=stop_timestamp_field,
     )
     return {"data": kept_items, "links": payload.get("links", {})}, collection_metadata
 
@@ -3790,13 +3779,23 @@ def _is_ioc_date_like_key(key: Any) -> bool:
     normalized_key = _normalize_ioc_date_key(key)
     if not normalized_key:
         return False
+    if normalized_key in IOC_STREAM_EXCLUDED_DATE_DIAGNOSTIC_FIELDS:
+        return False
     if normalized_key in {
         *IOC_STREAM_EVENT_TIMESTAMP_FIELDS,
         *IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS,
         "created_at",
     }:
         return True
-    return any(token in normalized_key for token in ("date", "time", "timestamp"))
+    return normalized_key.endswith("_date") or normalized_key.endswith("_timestamp")
+
+
+def _ioc_date_field_allows_numeric_string(normalized_key: str) -> bool:
+    return normalized_key in {
+        *IOC_STREAM_EVENT_TIMESTAMP_FIELDS,
+        *IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS,
+        "created_at",
+    }
 
 
 def _join_ioc_date_path(parent_path: str, key: Any) -> str:
@@ -3818,6 +3817,14 @@ def _find_ioc_date_fields(item: dict[str, Any]) -> list[dict[str, Any]]:
                 parsed_datetime = (
                     _parse_ioc_stream_datetime(child_value)
                     if _is_ioc_date_like_key(raw_key)
+                    and (
+                        not isinstance(child_value, str)
+                        or not re.fullmatch(
+                            r"\d+(?:\.\d+)?",
+                            child_value.strip(),
+                        )
+                        or _ioc_date_field_allows_numeric_string(normalized_key)
+                    )
                     else None
                 )
                 if parsed_datetime is not None:
@@ -4084,6 +4091,14 @@ def _oldest_object_metadata_timestamp(items: list[dict[str, Any]]) -> datetime |
     return min(timestamps) if timestamps else None
 
 
+def _unique_ioc_item_count(items: list[dict[str, Any]]) -> int:
+    unique_keys: set[str] = set()
+    for item in items:
+        normalized_item = normalize_ioc_stream_item(item)
+        unique_keys.add(str(normalized_item.get("ioc_key") or ""))
+    return len(unique_keys)
+
+
 def _ioc_stream_coverage_status(
     collection_mode: str,
     stopped_reason: str,
@@ -4096,16 +4111,13 @@ def _ioc_stream_coverage_status(
         return "unavailable"
     if stopped_reason == "no_stream_timestamps":
         return "unavailable"
-    oldest_timestamp = _oldest_stream_event_timestamp(fetched_items)
-    if oldest_timestamp is None:
+    if _oldest_stream_event_timestamp(fetched_items) is None:
         return "unavailable"
-    if oldest_timestamp <= time_window_metadata["start_datetime"]:
-        return "complete"
-    if stopped_reason == "max_pages_reached":
-        return "partial"
     if stopped_reason == "no_more_pages":
         return "no_more_pages"
-    return "unknown"
+    if stopped_reason == "requested_pages_reached":
+        return "sample_filtered"
+    return "sample_filtered"
 
 
 def _ioc_stream_warnings(collection_mode: str, warnings: list[str]) -> list[str]:
@@ -4201,6 +4213,7 @@ def _build_ioc_stream_collection_metadata(
     latest_kept_timestamp = _newest_stream_event_timestamp(kept_items)
     time_window_filtering_applied = (
         collection_mode == "time_window"
+        and time_window_metadata is not None
         and stopped_reason != "no_stream_timestamps"
     )
     coverage_status = _ioc_stream_coverage_status(
@@ -4221,6 +4234,8 @@ def _build_ioc_stream_collection_metadata(
         "raw_ioc_count": len(fetched_items),
         "raw_iocs_fetched": len(fetched_items),
         "iocs_inside_window": len(kept_items),
+        "iocs_inside_selected_window": len(kept_items),
+        "unique_iocs_after_deduplication": _unique_ioc_item_count(kept_items),
         "time_window_filtering_applied": time_window_filtering_applied,
         "recommendation": (
             IOC_STREAM_RECENT_MODE_RECOMMENDATION
