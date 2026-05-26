@@ -2585,6 +2585,11 @@ function RecentExposureCollectionSummary(responseData) {
     const latestKeptTimestamp = collection.latest_kept_timestamp || responseData.summary?.latest_kept_timestamp || collection.latest_timestamp || responseData.summary?.latest_timestamp;
     const recommendation = collection.recommendation || diagnostics.recommendation || "";
     const filteringApplied = collection.time_window_filtering_applied ?? diagnostics.time_window_filtering_applied;
+    const localInsideWindowCount = collection.local_inside_window_count ?? diagnostics.local_inside_window_count;
+    const insideWindowValue = localInsideWindowCount ?? collection.iocs_inside_window ?? responseData.summary?.iocs_inside_window ?? collection.raw_ioc_count ?? 0;
+    const insideWindowHint = collectionMode === "time_window" ? "validated" : "kept";
+    const serverFilterUnverified = collection.coverage_status === "server_filter_unverified";
+    const serverDateDiagnosticsLine = collectionMode === "time_window" && collection.server_side_date_filter_attempted ? `<p class="compact-note">Server date filter returned: ${escapeHtml(String(collection.server_side_date_filter_returned_count ?? collection.server_side_date_filter_item_count ?? 0))}. Local inside window: ${escapeHtml(String(localInsideWindowCount ?? 0))}. Local outside window: ${escapeHtml(String(collection.local_outside_window_count ?? diagnostics.local_outside_window_count ?? 0))}.</p>` : "";
     const streamTimestampFields = diagnostics.stream_timestamp_fields_seen || collection.stream_timestamp_fields_seen || [];
     const objectTimestampFields = diagnostics.object_metadata_timestamp_fields_seen || collection.object_metadata_timestamp_fields_seen || [];
     const rawTimestampDiagnostics = diagnostics.raw_item_timestamp_diagnostics || collection.raw_item_timestamp_diagnostics || [];
@@ -2609,7 +2614,7 @@ function RecentExposureCollectionSummary(responseData) {
         ["Max Pages", collection.max_pages ?? collection.requested_pages ?? "n/a", "safety cap"],
         ["Page Size", collection.page_size ?? responseData.summary?.page_size ?? "n/a", "API limit"],
         ["Raw IoCs Fetched", collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0, "before filtering"],
-        ["Inside Window", collection.iocs_inside_window ?? responseData.summary?.iocs_inside_window ?? collection.raw_ioc_count ?? 0, "kept"],
+        ["Inside Window", insideWindowValue, insideWindowHint],
         ["Unique IoCs", collection.unique_ioc_count ?? responseData.summary?.unique_ioc_count ?? 0, "deduped"],
         ["Duplicates Removed", collection.duplicates_removed ?? responseData.summary?.duplicates_removed ?? 0, "duplicates"],
         ["Enriched", collection.total_enriched ?? responseData.summary?.total_enriched ?? 0, "IoCs"],
@@ -2647,6 +2652,7 @@ function RecentExposureCollectionSummary(responseData) {
             </div>
             <p class="compact-note">Stopped reason: ${escapeHtml(String(diagnostics.stopped_reason || collection.stopped_reason || "unknown"))}. Unique IoCs: ${escapeHtml(String(diagnostics.unique_ioc_count ?? collection.unique_ioc_count ?? 0))}. Duplicates removed: ${escapeHtml(String(diagnostics.duplicates_removed ?? collection.duplicates_removed ?? 0))}.</p>
             <p class="compact-note">Raw IoCs: ${escapeHtml(String(diagnostics.raw_ioc_count ?? collection.raw_ioc_count ?? 0))}. Items with stream timestamp: ${escapeHtml(String(diagnostics.items_with_stream_timestamp ?? collection.items_with_stream_timestamp ?? 0))}. Items without stream timestamp: ${escapeHtml(String(diagnostics.items_without_stream_timestamp ?? collection.items_without_stream_timestamp ?? collection.items_without_stream_timestamp_count ?? 0))}.</p>
+            ${serverDateDiagnosticsLine}
             <p class="compact-note">Stream timestamp fields seen: ${escapeHtml(String(streamTimestampFields.join?.(", ") || "none"))}. Object metadata timestamp fields seen: ${escapeHtml(String(objectTimestampFields.join?.(", ") || "none"))}.</p>
             <p class="compact-note">Timestamp fields seen: ${escapeHtml(String((diagnostics.timestamp_fields_seen || collection.timestamp_fields_seen || []).join?.(", ") || "none"))}. Stop timestamp field: ${escapeHtml(String(diagnostics.stop_timestamp_field || collection.stop_timestamp_field || "none"))}.</p>
             <p class="compact-note">Oldest stream event timestamp: ${escapeHtml(String(formatTimestampForReport(diagnostics.oldest_stream_event_timestamp || collection.oldest_stream_event_timestamp)))}. Oldest object metadata timestamp: ${escapeHtml(String(formatTimestampForReport(diagnostics.oldest_object_metadata_timestamp || collection.oldest_object_metadata_timestamp)))}.</p>
@@ -2695,7 +2701,7 @@ function RecentExposureCollectionSummary(responseData) {
             <p><strong>Max pages:</strong> ${escapeHtml(String(collection.max_pages ?? collection.requested_pages ?? "n/a"))}</p>
             <p><strong>Page size:</strong> ${escapeHtml(String(collection.page_size ?? responseData.summary?.page_size ?? "n/a"))}</p>
             <p><strong>Raw IoCs fetched:</strong> ${escapeHtml(String(collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0))}</p>
-            <p><strong>IoCs inside selected window:</strong> ${escapeHtml(String(collection.iocs_inside_window ?? responseData.summary?.iocs_inside_window ?? collection.raw_ioc_count ?? 0))}</p>
+            <p><strong>IoCs inside selected window:</strong> ${escapeHtml(String(insideWindowValue))}</p>
             <p><strong>Unique IoCs after deduplication:</strong> ${escapeHtml(String(collection.unique_ioc_count ?? responseData.summary?.unique_ioc_count ?? 0))}</p>
             <p><strong>Duplicates removed:</strong> ${escapeHtml(String(collection.duplicates_removed ?? responseData.summary?.duplicates_removed ?? 0))}</p>
             <p><strong>Stopped reason:</strong> ${escapeHtml(String(stoppedReason))}</p>
@@ -2705,6 +2711,7 @@ function RecentExposureCollectionSummary(responseData) {
             <p><strong>Latest kept timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(latestKeptTimestamp)))}</p>
             ${collectionMode === "time_window" ? `<p><strong>Coverage status:</strong> ${escapeHtml(String(collection.coverage_status || "unknown"))}</p>` : ""}
             ${collectionMode === "time_window" && filteringApplied !== undefined ? `<p><strong>Time-window filtering applied:</strong> ${escapeHtml(String(Boolean(filteringApplied)))}</p>` : ""}
+            ${serverFilterUnverified ? `<p class="compact-note">Server date filter returned results, but local timestamp validation found items outside the selected range.</p>` : ""}
             ${recommendation ? `<p><strong>Recommendation:</strong> ${escapeHtml(String(recommendation))}</p>` : ""}
             <div class="kpi-grid ioc-summary-grid">
                 ${cards.map(([label, value, hint]) => `

@@ -80,6 +80,15 @@ IOC_STREAM_NO_TIMESTAMPS_WARNING = (
     "GTI returned IoCs, but no usable stream notification timestamps were exposed. "
     "Time-window filtering could not be applied safely."
 )
+IOC_STREAM_SERVER_DATE_FILTER_FALLBACK_WARNING = (
+    "Server-side date filter did not return usable results; fallback local filtering was used."
+)
+IOC_STREAM_SERVER_DATE_FILTER_UNVERIFIED_WARNING = (
+    "GTI returned items outside the requested date window; local validation was applied."
+)
+IOC_STREAM_SERVER_DATE_FILTER_NO_TIMESTAMPS_WARNING = (
+    "GTI did not expose usable stream timestamps, so date coverage cannot be verified."
+)
 IOC_STREAM_RECENT_MODE_RECOMMENDATION = (
     "Use Recent chronological sample mode for this dataset."
 )
@@ -580,19 +589,40 @@ def fetch_ioc_stream(
         filters.append(f"entity_type:{normalized_entity_type}")
     if normalized_origin != "all":
         filters.append(f"origin:{normalized_origin}")
+    use_server_side_date_filter = (
+        normalized_collection_mode == "time_window"
+        and time_window_metadata is not None
+    )
+    server_side_date_filter_string = (
+        _build_ioc_stream_server_side_date_filter(time_window_metadata)
+        if use_server_side_date_filter
+        else None
+    )
+    combined_filters = (
+        [server_side_date_filter_string, *filters]
+        if server_side_date_filter_string
+        else list(filters)
+    )
 
     base_params: dict[str, Any] = {
         "descriptors_only": "true" if descriptors_only else "false",
         "order": "date",
     }
+    if combined_filters:
+        base_params["filter"] = " ".join(combined_filters)
+    local_filter_params: dict[str, Any] = {
+        "descriptors_only": "true" if descriptors_only else "false",
+        "order": "date",
+    }
     if filters:
-        base_params["filter"] = " ".join(filters)
+        local_filter_params["filter"] = " ".join(filters)
     request_params: dict[str, Any] = {
         **base_params,
         "collection_mode": normalized_collection_mode,
         "pages_to_fetch": normalized_pages_to_fetch,
         "max_pages": normalized_pages_to_fetch,
         "api_page_limit": IOC_STREAM_API_PAGE_LIMIT,
+        "use_server_side_date_filter": use_server_side_date_filter,
     }
     if limit is not None:
         request_params["compatibility_limit"] = limit
@@ -660,136 +690,263 @@ def fetch_ioc_stream(
             ),
         }
 
-    fetched_items: list[dict[str, Any]] = []
-    endpoint_results: list[dict[str, Any]] = []
-    page_diagnostics: list[dict[str, Any]] = []
-    page_payloads: list[Any] = []
-    current_cursor = normalized_cursor
-    current_url = VIRUSTOTAL_IOC_STREAM_URL
-    next_cursor: str | None = None
-    final_status_code = 0
-    warnings: list[str] = []
-    stopped_reason = "requested_pages_reached"
-    seen_page_tokens: set[str] = set()
+    def fetch_pages_with_params(
+        params_template: dict[str, Any],
+    ) -> dict[str, Any]:
+        fetched_items: list[dict[str, Any]] = []
+        endpoint_results: list[dict[str, Any]] = []
+        page_diagnostics: list[dict[str, Any]] = []
+        page_payloads: list[Any] = []
+        current_cursor = normalized_cursor
+        current_url = VIRUSTOTAL_IOC_STREAM_URL
+        next_cursor: str | None = None
+        final_status_code = 0
+        attempt_warnings: list[str] = []
+        stopped_reason = "requested_pages_reached"
+        seen_page_tokens: set[str] = set()
+        first_payload: Any = {}
 
-    for page_number in range(1, normalized_pages_to_fetch + 1):
-        request_uses_base_url = current_url == VIRUSTOTAL_IOC_STREAM_URL
-        params = {**base_params, "limit": IOC_STREAM_API_PAGE_LIMIT} if request_uses_base_url else None
-        if params is not None and current_cursor:
-            params["cursor"] = current_cursor
+        for page_number in range(1, normalized_pages_to_fetch + 1):
+            request_uses_base_url = current_url == VIRUSTOTAL_IOC_STREAM_URL
+            params = (
+                {**params_template, "limit": IOC_STREAM_API_PAGE_LIMIT}
+                if request_uses_base_url
+                else None
+            )
+            if params is not None and current_cursor:
+                params["cursor"] = current_cursor
 
-        endpoint_result = _probe_json_endpoint(
-            api_key=normalized_api_key,
-            url=current_url,
-            params=params,
-            endpoint_name="ioc_stream",
-        )
-        endpoint_result = {**endpoint_result, "request_params": params or {}}
-        endpoint_results.append(endpoint_result)
-        payload = endpoint_result["raw_json"]
-        final_status_code = int(endpoint_result["http_status"])
+            endpoint_result = _probe_json_endpoint(
+                api_key=normalized_api_key,
+                url=current_url,
+                params=params,
+                endpoint_name="ioc_stream",
+            )
+            endpoint_result = {**endpoint_result, "request_params": params or {}}
+            endpoint_results.append(endpoint_result)
+            payload = endpoint_result["raw_json"]
+            if page_number == 1:
+                first_payload = payload
+            final_status_code = int(endpoint_result["http_status"])
 
-        if final_status_code != 200:
+            if final_status_code != 200:
+                cursor_details = _extract_next_cursor_details(payload)
+                page_diagnostics.append(
+                    {
+                        "page_number": page_number,
+                        "http_status": final_status_code,
+                        "raw_page_item_count": len(_extract_api_items(payload)),
+                        "next_cursor_found": False,
+                        "next_link_found": False,
+                        "next_cursor_source": cursor_details["next_cursor_source"],
+                        "ignored_cursor_candidate": cursor_details[
+                            "ignored_cursor_candidate"
+                        ],
+                        "ignored_cursor_reason": cursor_details["ignored_cursor_reason"],
+                        "request_url": current_url,
+                        "request_params": params or {},
+                    }
+                )
+                stopped_reason = "upstream_error"
+                if not fetched_items:
+                    break
+                api_error = _extract_api_error_detail(payload)
+                attempt_warnings.append(
+                    f"Page {page_number} returned HTTP {final_status_code}"
+                    + (f": {api_error}" if api_error else "")
+                    + ". Report uses data from the previous pages only."
+                )
+                final_status_code = 200
+                break
+
+            page_payloads.append(payload)
+            page_items = _extract_api_items(payload)
+            fetched_items.extend(page_items)
+
             cursor_details = _extract_next_cursor_details(payload)
+            next_cursor = cursor_details["next_cursor"]
+            next_cursor_source = cursor_details["next_cursor_source"]
+            ignored_cursor_candidate = cursor_details["ignored_cursor_candidate"]
+            ignored_cursor_reason = cursor_details["ignored_cursor_reason"]
+            next_link_url = _normalize_ioc_stream_next_url(
+                _extract_next_link_from_payload(payload)
+                or _extract_next_link_from_headers(
+                    endpoint_result.get("response_headers", {})
+                )
+            )
+            if not next_cursor and next_link_url:
+                next_cursor = _extract_cursor_from_url(next_link_url)
+                if next_cursor:
+                    next_cursor_source = "payload.links.next"
+
             page_diagnostics.append(
                 {
                     "page_number": page_number,
                     "http_status": final_status_code,
-                    "raw_page_item_count": len(_extract_api_items(payload)),
-                    "next_cursor_found": False,
-                    "next_link_found": False,
-                    "next_cursor_source": cursor_details["next_cursor_source"],
-                    "ignored_cursor_candidate": cursor_details["ignored_cursor_candidate"],
-                    "ignored_cursor_reason": cursor_details["ignored_cursor_reason"],
+                    "raw_page_item_count": len(page_items),
+                    "next_cursor_found": bool(next_cursor),
+                    "next_link_found": bool(next_link_url),
+                    "next_cursor_source": next_cursor_source,
+                    "ignored_cursor_candidate": ignored_cursor_candidate,
+                    "ignored_cursor_reason": ignored_cursor_reason,
                     "request_url": current_url,
                     "request_params": params or {},
                 }
             )
-            if not fetched_items:
-                return {
-                    "status_code": final_status_code,
-                    "total_collected": 0,
-                    "next_cursor": None,
-                    "raw_data": payload,
-                    "endpoint_results": endpoint_results,
-                    "page_diagnostics": page_diagnostics,
-                    "request_params": request_params,
-                    "warnings": _ioc_stream_warnings(normalized_collection_mode, warnings),
-                }
-            api_error = _extract_api_error_detail(payload)
-            warnings.append(
-                f"Page {page_number} returned HTTP {final_status_code}"
-                + (f": {api_error}" if api_error else "")
-                + ". Report uses data from the previous pages only."
-            )
-            stopped_reason = "upstream_error"
-            final_status_code = 200
-            break
 
-        page_payloads.append(payload)
-        page_items = _extract_api_items(payload)
-        fetched_items.extend(page_items)
-
-        cursor_details = _extract_next_cursor_details(payload)
-        next_cursor = cursor_details["next_cursor"]
-        next_cursor_source = cursor_details["next_cursor_source"]
-        ignored_cursor_candidate = cursor_details["ignored_cursor_candidate"]
-        ignored_cursor_reason = cursor_details["ignored_cursor_reason"]
-        next_link_url = _normalize_ioc_stream_next_url(
-            _extract_next_link_from_payload(payload) or _extract_next_link_from_headers(
-                endpoint_result.get("response_headers", {})
-            )
-        )
-        if not next_cursor and next_link_url:
-            next_cursor = _extract_cursor_from_url(next_link_url)
-            if next_cursor:
-                next_cursor_source = "payload.links.next"
-
-        page_diagnostics.append(
-            {
-                "page_number": page_number,
-                "http_status": final_status_code,
-                "raw_page_item_count": len(page_items),
-                "next_cursor_found": bool(next_cursor),
-                "next_link_found": bool(next_link_url),
-                "next_cursor_source": next_cursor_source,
-                "ignored_cursor_candidate": ignored_cursor_candidate,
-                "ignored_cursor_reason": ignored_cursor_reason,
-                "request_url": current_url,
-                "request_params": params or {},
-            }
-        )
-
-        if not next_cursor or not page_items:
-            if next_link_url:
-                page_token = next_link_url
-                if page_token in seen_page_tokens:
-                    stopped_reason = "pagination_loop_detected"
-                    break
-                seen_page_tokens.add(page_token)
-                current_url = next_link_url
-                current_cursor = ""
-                continue
-            else:
+            if not next_cursor or not page_items:
+                if next_link_url:
+                    page_token = next_link_url
+                    if page_token in seen_page_tokens:
+                        stopped_reason = "pagination_loop_detected"
+                        break
+                    seen_page_tokens.add(page_token)
+                    current_url = next_link_url
+                    current_cursor = ""
+                    continue
                 stopped_reason = "no_more_pages"
                 break
 
-        page_token = f"cursor:{next_cursor}"
-        if page_token in seen_page_tokens:
-            stopped_reason = "pagination_loop_detected"
-            break
-        seen_page_tokens.add(page_token)
-        current_url = VIRUSTOTAL_IOC_STREAM_URL
-        current_cursor = next_cursor
+            page_token = f"cursor:{next_cursor}"
+            if page_token in seen_page_tokens:
+                stopped_reason = "pagination_loop_detected"
+                break
+            seen_page_tokens.add(page_token)
+            current_url = VIRUSTOTAL_IOC_STREAM_URL
+            current_cursor = next_cursor
+
+        return {
+            "fetched_items": fetched_items,
+            "endpoint_results": endpoint_results,
+            "page_diagnostics": page_diagnostics,
+            "page_payloads": page_payloads,
+            "next_cursor": next_cursor,
+            "final_status_code": final_status_code,
+            "warnings": attempt_warnings,
+            "stopped_reason": stopped_reason,
+            "first_payload": first_payload,
+        }
+
+    server_side_date_filter_metadata = {
+        "server_side_date_filter_attempted": use_server_side_date_filter,
+        "server_side_date_filter_string": server_side_date_filter_string,
+        "server_side_date_filter_status": (
+            "not_attempted" if not use_server_side_date_filter else "attempted"
+        ),
+        "server_side_date_filter_item_count": 0,
+        "server_side_date_filter_returned_count": 0,
+        "local_inside_window_count": 0,
+        "local_outside_window_count": 0,
+        "earliest_outside_window_timestamp": None,
+        "latest_outside_window_timestamp": None,
+        "fallback_used": False,
+    }
+
+    warnings: list[str] = []
+    server_side_filter_used = False
+    attempt_result = fetch_pages_with_params(base_params)
+    if use_server_side_date_filter:
+        first_status_code = int(attempt_result["final_status_code"])
+        server_item_count = len(attempt_result["fetched_items"])
+        server_side_date_filter_metadata[
+            "server_side_date_filter_item_count"
+        ] = server_item_count
+        server_side_date_filter_metadata[
+            "server_side_date_filter_returned_count"
+        ] = server_item_count
+        if first_status_code == 200 and server_item_count > 0:
+            server_side_date_filter_metadata[
+                "server_side_date_filter_status"
+            ] = "success"
+            server_side_filter_used = True
+        elif first_status_code in {200, 400, 404} and server_item_count == 0:
+            server_side_date_filter_metadata[
+                "server_side_date_filter_status"
+            ] = (
+                "empty"
+                if first_status_code == 200
+                else f"http_{first_status_code}"
+            )
+            server_side_date_filter_metadata["fallback_used"] = True
+            warnings = [IOC_STREAM_SERVER_DATE_FILTER_FALLBACK_WARNING]
+            attempt_result = fetch_pages_with_params(local_filter_params)
+        else:
+            server_side_date_filter_metadata[
+                "server_side_date_filter_status"
+            ] = f"http_{first_status_code}"
+
+    fetched_items = attempt_result["fetched_items"]
+    endpoint_results = attempt_result["endpoint_results"]
+    page_diagnostics = attempt_result["page_diagnostics"]
+    page_payloads = attempt_result["page_payloads"]
+    next_cursor = attempt_result["next_cursor"]
+    final_status_code = int(attempt_result["final_status_code"])
+    warnings = [*warnings, *attempt_result["warnings"]]
+    stopped_reason = attempt_result["stopped_reason"]
+
+    if final_status_code != 200 and not fetched_items:
+        return {
+            "status_code": final_status_code,
+            "total_collected": 0,
+            "next_cursor": None,
+            "raw_data": attempt_result["first_payload"],
+            "endpoint_results": endpoint_results,
+            "page_diagnostics": page_diagnostics,
+            "request_params": request_params,
+            "warnings": _ioc_stream_warnings(normalized_collection_mode, warnings),
+        }
 
     time_window_without_stream_timestamps = (
         normalized_collection_mode == "time_window"
+        and not server_side_filter_used
         and bool(fetched_items)
         and _oldest_stream_event_timestamp(fetched_items) is None
     )
     if time_window_without_stream_timestamps:
         stopped_reason = "no_stream_timestamps"
         warnings.append(IOC_STREAM_NO_TIMESTAMPS_WARNING)
+
+    window_validation_metadata: dict[str, Any] | None = None
+    locally_validated_items: list[dict[str, Any]] = []
+    if (
+        normalized_collection_mode == "time_window"
+        and start_datetime is not None
+        and end_datetime is not None
+    ):
+        window_validation = _validate_ioc_stream_items_against_time_window(
+            fetched_items,
+            start_datetime,
+            end_datetime,
+        )
+        locally_validated_items = window_validation["inside_items"]
+        window_validation_metadata = {
+            "local_inside_window_count": window_validation[
+                "local_inside_window_count"
+            ],
+            "local_outside_window_count": window_validation[
+                "local_outside_window_count"
+            ],
+            "earliest_outside_window_timestamp": (
+                window_validation["earliest_outside_window_timestamp"].isoformat()
+                if window_validation["earliest_outside_window_timestamp"]
+                else None
+            ),
+            "latest_outside_window_timestamp": (
+                window_validation["latest_outside_window_timestamp"].isoformat()
+                if window_validation["latest_outside_window_timestamp"]
+                else None
+            ),
+        }
+        if use_server_side_date_filter:
+            server_side_date_filter_metadata.update(window_validation_metadata)
+            accepted_count = (
+                window_validation["local_inside_window_count"]
+                + window_validation["local_outside_window_count"]
+            )
+            if accepted_count == 0 and fetched_items:
+                warnings.append(IOC_STREAM_SERVER_DATE_FILTER_NO_TIMESTAMPS_WARNING)
+            elif window_validation["local_outside_window_count"] > 0:
+                warnings.append(IOC_STREAM_SERVER_DATE_FILTER_UNVERIFIED_WARNING)
 
     if time_window_without_stream_timestamps:
         kept_items = list(fetched_items)
@@ -798,11 +955,15 @@ def fetch_ioc_stream(
         and start_datetime is not None
         and end_datetime is not None
     ):
-        kept_items = [
-            item
-            for item in fetched_items
-            if _ioc_item_is_in_time_window(item, start_datetime, end_datetime)
-        ]
+        accepted_count = (
+            (window_validation_metadata or {}).get("local_inside_window_count", 0)
+            + (window_validation_metadata or {}).get("local_outside_window_count", 0)
+        )
+        kept_items = (
+            list(locally_validated_items)
+            if accepted_count
+            else list(fetched_items)
+        )
     else:
         kept_items = list(fetched_items)
     collection_metadata = _build_ioc_stream_collection_metadata(
@@ -814,6 +975,8 @@ def fetch_ioc_stream(
         stopped_reason=stopped_reason,
         collection_mode=normalized_collection_mode,
         time_window_metadata=time_window_metadata,
+        server_side_date_filter_metadata=server_side_date_filter_metadata,
+        window_validation_metadata=window_validation_metadata,
     )
     collection_metadata["page_diagnostics"] = page_diagnostics
     warnings = _ioc_stream_warnings(normalized_collection_mode, warnings)
@@ -1140,6 +1303,39 @@ def build_ioc_stream_report(
             "items_without_stream_timestamp_count",
             0,
         ),
+        "server_side_date_filter_attempted": collection_metadata.get(
+            "server_side_date_filter_attempted",
+            False,
+        ),
+        "server_side_date_filter_string": collection_metadata.get(
+            "server_side_date_filter_string"
+        ),
+        "server_side_date_filter_status": collection_metadata.get(
+            "server_side_date_filter_status"
+        ),
+        "server_side_date_filter_item_count": collection_metadata.get(
+            "server_side_date_filter_item_count",
+            0,
+        ),
+        "server_side_date_filter_returned_count": collection_metadata.get(
+            "server_side_date_filter_returned_count",
+            collection_metadata.get("server_side_date_filter_item_count", 0),
+        ),
+        "local_inside_window_count": collection_metadata.get(
+            "local_inside_window_count",
+            collection_metadata.get("iocs_inside_window", 0),
+        ),
+        "local_outside_window_count": collection_metadata.get(
+            "local_outside_window_count",
+            0,
+        ),
+        "earliest_outside_window_timestamp": collection_metadata.get(
+            "earliest_outside_window_timestamp"
+        ),
+        "latest_outside_window_timestamp": collection_metadata.get(
+            "latest_outside_window_timestamp"
+        ),
+        "fallback_used": collection_metadata.get("fallback_used", False),
     }
     collection_metadata["total_collected"] = len(indicators)
     collection_metadata["total_enriched"] = enrichment_succeeded
@@ -4030,6 +4226,15 @@ def _public_ioc_time_window_metadata(
     }
 
 
+def _build_ioc_stream_server_side_date_filter(
+    time_window_metadata: dict[str, Any],
+) -> str:
+    return (
+        f"date:{time_window_metadata['start_date']}+ "
+        f"date:{time_window_metadata['end_date']}-"
+    )
+
+
 def _ioc_item_is_in_time_window(
     item: dict[str, Any],
     start_datetime: datetime,
@@ -4039,6 +4244,50 @@ def _ioc_item_is_in_time_window(
     if item_datetime is None:
         return False
     return start_datetime <= item_datetime <= end_datetime
+
+
+def _extract_locally_validated_stream_datetime(
+    item: dict[str, Any],
+) -> datetime | None:
+    for candidate in _find_ioc_date_fields(item):
+        if candidate["classification"] != "stream_timestamp":
+            continue
+        field_name = str(candidate.get("key") or "")
+        if field_name not in IOC_STREAM_EVENT_TIMESTAMP_FIELDS:
+            continue
+        item_datetime = candidate.get("parsed_datetime")
+        if isinstance(item_datetime, datetime):
+            return item_datetime
+    return None
+
+
+def _validate_ioc_stream_items_against_time_window(
+    items: list[dict[str, Any]],
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> dict[str, Any]:
+    inside_items: list[dict[str, Any]] = []
+    outside_timestamps: list[datetime] = []
+    for item in items:
+        item_datetime = _extract_locally_validated_stream_datetime(item)
+        if item_datetime is None:
+            continue
+        if start_datetime <= item_datetime <= end_datetime:
+            inside_items.append(item)
+        else:
+            outside_timestamps.append(item_datetime)
+
+    return {
+        "inside_items": inside_items,
+        "local_inside_window_count": len(inside_items),
+        "local_outside_window_count": len(outside_timestamps),
+        "earliest_outside_window_timestamp": (
+            min(outside_timestamps) if outside_timestamps else None
+        ),
+        "latest_outside_window_timestamp": (
+            max(outside_timestamps) if outside_timestamps else None
+        ),
+    }
 
 
 def _stream_event_timestamps_with_fields(
@@ -4104,11 +4353,29 @@ def _ioc_stream_coverage_status(
     stopped_reason: str,
     fetched_items: list[dict[str, Any]],
     time_window_metadata: dict[str, Any] | None,
+    server_side_date_filter_metadata: dict[str, Any] | None = None,
 ) -> str | None:
     if collection_mode != "time_window":
         return None
     if not fetched_items or not time_window_metadata:
         return "unavailable"
+    if (
+        server_side_date_filter_metadata
+        and server_side_date_filter_metadata.get("server_side_date_filter_status")
+        == "success"
+        and not server_side_date_filter_metadata.get("fallback_used")
+    ):
+        if _safe_int(
+            server_side_date_filter_metadata.get("local_inside_window_count")
+        ) + _safe_int(
+            server_side_date_filter_metadata.get("local_outside_window_count")
+        ) == 0:
+            return "unavailable"
+        if _safe_int(
+            server_side_date_filter_metadata.get("local_outside_window_count")
+        ) > 0:
+            return "server_filter_unverified"
+        return "server_filtered_sample"
     if stopped_reason == "no_stream_timestamps":
         return "unavailable"
     if _oldest_stream_event_timestamp(fetched_items) is None:
@@ -4206,11 +4473,30 @@ def _build_ioc_stream_collection_metadata(
     collection_mode: str,
     time_window_metadata: dict[str, Any] | None,
     stop_timestamp_field: str | None = None,
+    server_side_date_filter_metadata: dict[str, Any] | None = None,
+    window_validation_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    server_side_date_filter_metadata = server_side_date_filter_metadata or {
+        "server_side_date_filter_attempted": False,
+        "server_side_date_filter_string": None,
+        "server_side_date_filter_status": "not_attempted",
+        "server_side_date_filter_item_count": 0,
+        "server_side_date_filter_returned_count": 0,
+        "local_inside_window_count": 0,
+        "local_outside_window_count": 0,
+        "earliest_outside_window_timestamp": None,
+        "latest_outside_window_timestamp": None,
+        "fallback_used": False,
+    }
+    window_validation_metadata = window_validation_metadata or {}
     earliest_fetched_timestamp = _oldest_stream_event_timestamp(fetched_items)
     latest_fetched_timestamp = _newest_stream_event_timestamp(fetched_items)
     earliest_kept_timestamp = _oldest_stream_event_timestamp(kept_items)
     latest_kept_timestamp = _newest_stream_event_timestamp(kept_items)
+    inside_window_count = _safe_int(
+        window_validation_metadata.get("local_inside_window_count"),
+        len(kept_items),
+    )
     time_window_filtering_applied = (
         collection_mode == "time_window"
         and time_window_metadata is not None
@@ -4221,6 +4507,7 @@ def _build_ioc_stream_collection_metadata(
         stopped_reason,
         fetched_items,
         time_window_metadata,
+        server_side_date_filter_metadata,
     )
     timestamp_diagnostics = _build_ioc_stream_timestamp_diagnostics(
         fetched_items=fetched_items,
@@ -4233,8 +4520,8 @@ def _build_ioc_stream_collection_metadata(
         "total_collected": len(kept_items),
         "raw_ioc_count": len(fetched_items),
         "raw_iocs_fetched": len(fetched_items),
-        "iocs_inside_window": len(kept_items),
-        "iocs_inside_selected_window": len(kept_items),
+        "iocs_inside_window": inside_window_count,
+        "iocs_inside_selected_window": inside_window_count,
         "unique_iocs_after_deduplication": _unique_ioc_item_count(kept_items),
         "time_window_filtering_applied": time_window_filtering_applied,
         "recommendation": (
@@ -4267,6 +4554,8 @@ def _build_ioc_stream_collection_metadata(
         ),
         "stopped_reason": stopped_reason,
         **timestamp_diagnostics,
+        **window_validation_metadata,
+        **(server_side_date_filter_metadata or {}),
         **({"coverage_status": coverage_status} if coverage_status else {}),
     }
 

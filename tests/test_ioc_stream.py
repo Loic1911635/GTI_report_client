@@ -187,6 +187,117 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertNotIn("date", params.get("filter", ""))
 
     @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_time_window_sends_server_side_date_filter(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.return_value = {
+            "http_status": 200,
+            "response_headers": {},
+            "raw_json": {
+                "data": [
+                    {
+                        "id": "https://example.test/path",
+                        "type": "url",
+                        "attributes": {"matched_on": "2026-05-20T10:00:00Z"},
+                    }
+                ]
+            },
+        }
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="time_window",
+            time_window="custom",
+            start_date="2026-05-19",
+            end_date="2026-05-25",
+            entity_type="url",
+            origin="hunting",
+            max_pages=1,
+        )
+
+        params = mock_probe.call_args.kwargs["params"]
+        self.assertEqual(params["limit"], 40)
+        self.assertEqual(params["order"], "date")
+        self.assertEqual(
+            params["filter"],
+            "date:2026-05-19+ date:2026-05-25- entity_type:url origin:hunting",
+        )
+        self.assertTrue(result["request_params"]["use_server_side_date_filter"])
+        self.assertTrue(result["collection"]["server_side_date_filter_attempted"])
+        self.assertEqual(
+            result["collection"]["server_side_date_filter_string"],
+            "date:2026-05-19+ date:2026-05-25-",
+        )
+        self.assertEqual(
+            result["collection"]["server_side_date_filter_status"],
+            "success",
+        )
+        self.assertEqual(result["collection"]["server_side_date_filter_item_count"], 1)
+        self.assertEqual(
+            result["collection"]["server_side_date_filter_returned_count"],
+            1,
+        )
+        self.assertEqual(result["collection"]["local_inside_window_count"], 1)
+        self.assertEqual(result["collection"]["local_outside_window_count"], 0)
+        self.assertFalse(result["collection"]["fallback_used"])
+        self.assertEqual(
+            result["collection"]["coverage_status"],
+            "server_filtered_sample",
+        )
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_time_window_revalidates_server_filtered_results(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.return_value = {
+            "http_status": 200,
+            "response_headers": {},
+            "raw_json": {
+                "data": [
+                    {
+                        "id": "inside.example",
+                        "type": "domain",
+                        "attributes": {"matched_on": "2026-05-20T10:00:00Z"},
+                    },
+                    {
+                        "id": "old.example",
+                        "type": "domain",
+                        "attributes": {"matched_on": "2025-12-07T10:00:00Z"},
+                    },
+                ]
+            },
+        }
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="time_window",
+            time_window="custom",
+            start_date="2026-05-19",
+            end_date="2026-05-25",
+            max_pages=1,
+        )
+
+        self.assertEqual(result["collection"]["coverage_status"], "server_filter_unverified")
+        self.assertEqual(result["collection"]["server_side_date_filter_returned_count"], 2)
+        self.assertEqual(result["collection"]["local_inside_window_count"], 1)
+        self.assertEqual(result["collection"]["local_outside_window_count"], 1)
+        self.assertEqual(result["collection"]["iocs_inside_window"], 1)
+        self.assertEqual(
+            result["collection"]["earliest_outside_window_timestamp"],
+            "2025-12-07T10:00:00+00:00",
+        )
+        self.assertEqual(
+            [item["id"] for item in result["raw_data"]["data"]],
+            ["inside.example"],
+        )
+        self.assertIn(
+            "GTI returned items outside the requested date window; local validation was applied.",
+            result["warnings"],
+        )
+
+    @patch("backend.gti_client._probe_json_endpoint")
     def test_fetch_ioc_stream_collects_all_returned_pages_without_date_filtering(
         self,
         mock_probe,
@@ -240,7 +351,7 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(result["collection"]["earliest_timestamp"], "2026-05-13T10:00:00+00:00")
 
     @patch("backend.gti_client._probe_json_endpoint")
-    def test_fetch_ioc_stream_time_window_filters_after_fetching_available_pages(
+    def test_fetch_ioc_stream_time_window_falls_back_to_local_filtering(
         self,
         mock_probe,
     ) -> None:
@@ -260,6 +371,7 @@ class IocStreamReportTests(unittest.TestCase):
             return {"http_status": 200, "response_headers": {}, "raw_json": payload}
 
         mock_probe.side_effect = [
+            {"http_status": 400, "response_headers": {}, "raw_json": {"error": {}}},
             page(0, ["2026-05-21T10:00:00Z", "2026-05-20T10:00:00Z"], "cursor-1"),
             page(40, ["2026-05-19T10:00:00Z", "2026-05-18T10:00:00Z"], "cursor-2"),
             page(80, ["2026-05-13T10:00:00Z"]),
@@ -274,7 +386,10 @@ class IocStreamReportTests(unittest.TestCase):
             max_pages=5,
         )
 
-        self.assertEqual(mock_probe.call_count, 3)
+        self.assertEqual(mock_probe.call_count, 4)
+        first_params = mock_probe.call_args_list[0].kwargs["params"]
+        self.assertEqual(first_params["filter"], "date:2026-05-14+ date:2026-05-21-")
+        self.assertNotIn("filter", mock_probe.call_args_list[1].kwargs["params"])
         self.assertEqual(result["total_collected"], 4)
         self.assertEqual(len(result["raw_data"]["data"]), 4)
         self.assertEqual(result["collection"]["raw_ioc_count"], 5)
@@ -282,6 +397,16 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(result["collection"]["iocs_inside_selected_window"], 4)
         self.assertEqual(result["collection"]["coverage_status"], "no_more_pages")
         self.assertEqual(result["collection"]["stopped_reason"], "no_more_pages")
+        self.assertTrue(result["collection"]["server_side_date_filter_attempted"])
+        self.assertEqual(
+            result["collection"]["server_side_date_filter_status"],
+            "http_400",
+        )
+        self.assertTrue(result["collection"]["fallback_used"])
+        self.assertIn(
+            "Server-side date filter did not return usable results; fallback local filtering was used.",
+            result["warnings"],
+        )
         self.assertEqual(
             result["collection"]["earliest_fetched_timestamp"],
             "2026-05-13T10:00:00+00:00",
@@ -289,6 +414,50 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(
             result["collection"]["earliest_kept_timestamp"],
             "2026-05-18T10:00:00+00:00",
+        )
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_time_window_falls_back_when_server_filter_is_empty(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.side_effect = [
+            {"http_status": 200, "response_headers": {}, "raw_json": {"data": []}},
+            {
+                "http_status": 200,
+                "response_headers": {},
+                "raw_json": {
+                    "data": [
+                        {
+                            "id": "inside.example",
+                            "type": "domain",
+                            "attributes": {"matched_on": "2026-05-20T10:00:00Z"},
+                        }
+                    ]
+                },
+            },
+        ]
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="time_window",
+            time_window="custom",
+            start_date="2026-05-19",
+            end_date="2026-05-25",
+            max_pages=1,
+        )
+
+        self.assertEqual(mock_probe.call_count, 2)
+        self.assertEqual(
+            result["collection"]["server_side_date_filter_status"],
+            "empty",
+        )
+        self.assertTrue(result["collection"]["fallback_used"])
+        self.assertEqual(result["total_collected"], 1)
+        self.assertEqual(result["collection"]["coverage_status"], "no_more_pages")
+        self.assertIn(
+            "Server-side date filter did not return usable results; fallback local filtering was used.",
+            result["warnings"],
         )
 
     @patch("backend.gti_client._probe_json_endpoint")
@@ -325,7 +494,11 @@ class IocStreamReportTests(unittest.TestCase):
         )
 
         self.assertEqual(result["collection"]["stopped_reason"], "requested_pages_reached")
-        self.assertEqual(result["collection"]["coverage_status"], "sample_filtered")
+        self.assertEqual(result["collection"]["coverage_status"], "server_filtered_sample")
+        self.assertEqual(
+            result["collection"]["server_side_date_filter_status"],
+            "success",
+        )
         self.assertEqual(result["collection"]["raw_ioc_count"], 2)
         self.assertEqual(result["collection"]["iocs_inside_window"], 2)
         self.assertEqual(result["collection"]["iocs_inside_selected_window"], 2)
@@ -336,6 +509,7 @@ class IocStreamReportTests(unittest.TestCase):
         mock_probe,
     ) -> None:
         mock_probe.side_effect = [
+            {"http_status": 404, "response_headers": {}, "raw_json": {"error": {}}},
             {
                 "http_status": 200,
                 "response_headers": {},
@@ -380,10 +554,15 @@ class IocStreamReportTests(unittest.TestCase):
             max_pages=2,
         )
 
-        self.assertEqual(mock_probe.call_count, 2)
+        self.assertEqual(mock_probe.call_count, 3)
         self.assertEqual(result["collection"]["pages_fetched"], 2)
         self.assertEqual(result["collection"]["stopped_reason"], "requested_pages_reached")
         self.assertEqual(result["collection"]["coverage_status"], "sample_filtered")
+        self.assertEqual(
+            result["collection"]["server_side_date_filter_status"],
+            "http_404",
+        )
+        self.assertTrue(result["collection"]["fallback_used"])
         self.assertEqual(result["collection"]["raw_iocs_fetched"], 3)
         self.assertEqual(result["collection"]["items_with_stream_timestamp"], 3)
         self.assertEqual(result["collection"]["items_without_stream_timestamp"], 0)
@@ -419,7 +598,11 @@ class IocStreamReportTests(unittest.TestCase):
         )
 
         self.assertEqual(result["collection"]["stopped_reason"], "no_more_pages")
-        self.assertEqual(result["collection"]["coverage_status"], "no_more_pages")
+        self.assertEqual(result["collection"]["coverage_status"], "server_filtered_sample")
+        self.assertEqual(
+            result["collection"]["server_side_date_filter_status"],
+            "success",
+        )
 
     @patch("backend.gti_client._probe_json_endpoint")
     def test_fetch_ioc_stream_time_window_ignores_old_object_metadata_for_stop(
@@ -473,7 +656,7 @@ class IocStreamReportTests(unittest.TestCase):
 
         self.assertEqual(mock_probe.call_count, 2)
         self.assertEqual(result["collection"]["stopped_reason"], "no_more_pages")
-        self.assertEqual(result["collection"]["coverage_status"], "no_more_pages")
+        self.assertEqual(result["collection"]["coverage_status"], "server_filtered_sample")
         self.assertEqual(result["collection"]["raw_ioc_count"], 2)
         self.assertEqual(result["collection"]["iocs_inside_window"], 2)
         self.assertEqual(
@@ -555,10 +738,20 @@ class IocStreamReportTests(unittest.TestCase):
 
         self.assertEqual(mock_probe.call_count, 2)
         self.assertEqual(result["collection"]["stopped_reason"], "no_more_pages")
-        self.assertEqual(result["collection"]["coverage_status"], "no_more_pages")
+        self.assertEqual(result["collection"]["coverage_status"], "server_filter_unverified")
         self.assertEqual(result["collection"]["raw_ioc_count"], 2)
+        self.assertEqual(result["collection"]["local_inside_window_count"], 1)
+        self.assertEqual(result["collection"]["local_outside_window_count"], 1)
+        self.assertEqual(
+            result["collection"]["earliest_outside_window_timestamp"],
+            "2026-05-13T10:00:00+00:00",
+        )
         self.assertEqual(result["total_collected"], 1)
         self.assertEqual(result["raw_data"]["data"][0]["id"], "inside.example")
+        self.assertIn(
+            "GTI returned items outside the requested date window; local validation was applied.",
+            result["warnings"],
+        )
         self.assertEqual(
             result["collection"]["earliest_fetched_timestamp"],
             "2026-05-13T10:00:00+00:00",
@@ -629,16 +822,15 @@ class IocStreamReportTests(unittest.TestCase):
             max_pages=5,
         )
 
-        self.assertEqual(result["collection"]["stopped_reason"], "no_stream_timestamps")
+        self.assertEqual(result["collection"]["stopped_reason"], "no_more_pages")
         self.assertEqual(result["collection"]["coverage_status"], "unavailable")
         self.assertEqual(result["collection"]["raw_ioc_count"], 1)
+        self.assertEqual(result["collection"]["local_inside_window_count"], 0)
+        self.assertEqual(result["collection"]["local_outside_window_count"], 0)
         self.assertEqual(result["total_collected"], 1)
         self.assertEqual(len(result["raw_data"]["data"]), 1)
-        self.assertFalse(result["collection"]["time_window_filtering_applied"])
-        self.assertEqual(
-            result["collection"]["recommendation"],
-            "Use Recent chronological sample mode for this dataset.",
-        )
+        self.assertTrue(result["collection"]["time_window_filtering_applied"])
+        self.assertIsNone(result["collection"]["recommendation"])
         self.assertEqual(result["collection"]["items_with_stream_timestamp"], 0)
         self.assertEqual(result["collection"]["items_without_stream_timestamp"], 1)
         self.assertEqual(result["collection"]["items_without_stream_timestamp_count"], 1)
@@ -661,8 +853,12 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertNotIn("timeout", raw_fields)
         self.assertNotIn("confirmed_timeout", raw_fields)
         self.assertNotIn("processing_timestamp", raw_fields)
-        self.assertIn(
+        self.assertNotIn(
             "GTI returned IoCs, but no usable stream notification timestamps were exposed. Time-window filtering could not be applied safely.",
+            result["warnings"],
+        )
+        self.assertIn(
+            "GTI did not expose usable stream timestamps, so date coverage cannot be verified.",
             result["warnings"],
         )
 
