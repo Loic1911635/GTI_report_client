@@ -2283,6 +2283,142 @@ function renderDtmInactiveTable(items) {
     `;
 }
 
+// ── DTM Dashboard SVG charts ─────────────────────────────────────────────────
+
+/** Traffic-light colours for alert severity levels. */
+const DTM_SEVERITY_COLORS = { high: "#dc3545", medium: "#fd7e14", low: "#28a745" };
+
+/**
+ * Renders an SVG donut chart for the alerts-by-severity section.
+ * Expects rows like [{severity: "high"|"medium"|"low", count: N}, ...].
+ */
+function renderDtmSeverityDonut(items) {
+    const rows = Array.isArray(items) ? items.filter((r) => Number(r.count || 0) > 0) : [];
+    const total = rows.reduce((s, r) => s + Number(r.count || 0), 0);
+    if (!rows.length || total === 0) {
+        return `<p><em>No severity data for this period.</em></p>`;
+    }
+
+    const cx = 72, cy = 72, outerR = 58, innerR = 35;
+    let angle = -Math.PI / 2;
+    const slices = rows.map((row) => {
+        const fraction = Number(row.count) / total;
+        const sweep = fraction * Math.PI * 2;
+        const color = DTM_SEVERITY_COLORS[(row.severity || "").toLowerCase()] || "#888";
+        const startAngle = angle;
+        const endAngle = angle + sweep;
+        angle = endAngle;
+        const largeArc = sweep > Math.PI ? 1 : 0;
+
+        if (rows.length === 1) {
+            return `<circle cx="${cx}" cy="${cy}" r="${outerR}" fill="${color}"></circle>`;
+        }
+        const x1o = cx + outerR * Math.cos(startAngle);
+        const y1o = cy + outerR * Math.sin(startAngle);
+        const x2o = cx + outerR * Math.cos(endAngle);
+        const y2o = cy + outerR * Math.sin(endAngle);
+        const x1i = cx + innerR * Math.cos(startAngle);
+        const y1i = cy + innerR * Math.sin(startAngle);
+        const x2i = cx + innerR * Math.cos(endAngle);
+        const y2i = cy + innerR * Math.sin(endAngle);
+        return `<path d="M ${x1i} ${y1i} L ${x1o} ${y1o} A ${outerR} ${outerR} 0 ${largeArc} 1 ${x2o} ${y2o} L ${x2i} ${y2i} A ${innerR} ${innerR} 0 ${largeArc} 0 ${x1i} ${y1i} Z" fill="${color}"><title>${escapeHtml(row.severity)}: ${escapeHtml(String(row.count))}</title></path>`;
+    }).join("");
+
+    const legend = rows.map((row) => {
+        const color = DTM_SEVERITY_COLORS[(row.severity || "").toLowerCase()] || "#888";
+        const sev = String(row.severity || "");
+        const label = sev.charAt(0).toUpperCase() + sev.slice(1);
+        const percent = Math.round((Number(row.count) / total) * 100);
+        return `<li>
+            <span class="ioc-chart-swatch" style="background:${color}"></span>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(String(row.count))} (${percent}%)</strong>
+        </li>`;
+    }).join("");
+
+    return `
+        <div class="ioc-donut-chart" role="img" aria-label="Alerts by severity">
+            <svg viewBox="0 0 144 144" aria-hidden="true">
+                ${slices}
+                <circle cx="${cx}" cy="${cy}" r="${innerR}" fill="white"></circle>
+                <text x="${cx}" y="${cy - 3}" text-anchor="middle" class="ioc-donut-total">${escapeHtml(String(total))}</text>
+                <text x="${cx}" y="${cy + 13}" text-anchor="middle" class="ioc-donut-label">Alerts</text>
+            </svg>
+            <ul class="ioc-chart-legend">${legend}</ul>
+        </div>`;
+}
+
+/**
+ * Renders a horizontal bar chart for a list of DTM data rows.
+ * @param {Array} rows - Array of data objects.
+ * @param {string} labelKey - Property name for the bar label.
+ * @param {string} valueKey - Property name for the numeric value.
+ * @param {{ emptyMessage?: string, colorFn?: (row, index) => string }} options
+ */
+function renderDtmHorizontalBars(rows, labelKey, valueKey, options) {
+    const data = Array.isArray(rows) ? rows : [];
+    const opts = options || {};
+    if (!data.length) {
+        return `<p><em>${escapeHtml(opts.emptyMessage || "No data for this period.")}</em></p>`;
+    }
+    const maxValue = Math.max(...data.map((r) => Number(r[valueKey] || 0)), 1);
+    const colorFn = opts.colorFn || ((_, i) => CHART_PALETTE[i % CHART_PALETTE.length]);
+
+    return `<div class="dtm-bar-chart">
+        ${data.map((row, i) => {
+            const value = Number(row[valueKey] || 0);
+            const pct = Math.max(4, Math.round((value / maxValue) * 100));
+            return `
+            <div class="dtm-bar-row">
+                <span class="dtm-bar-label" title="${escapeHtml(String(row[labelKey] || "Unknown"))}">${escapeHtml(String(row[labelKey] || "Unknown"))}</span>
+                <div class="dtm-bar-track"><div class="dtm-bar-fill" style="width:${pct}%;background:${colorFn(row, i)}"></div></div>
+                <strong class="dtm-bar-value">${escapeHtml(formatInteger(value))}</strong>
+            </div>`;
+        }).join("")}
+    </div>`;
+}
+
+/**
+ * Renders a vertical bar chart for the alerts-timeline section.
+ * Expects rows like [{date: "YYYY-MM-DD", count: N}, ...].
+ */
+function renderDtmTimelineChart(items) {
+    const rows = Array.isArray(items) ? items : [];
+    if (!rows.length) {
+        return `<p><em>No dated alerts were returned.</em></p>`;
+    }
+
+    const maxCount = Math.max(...rows.map((r) => Number(r.count || 0)), 1);
+    const chartH = 90;
+    const barW = Math.max(8, Math.min(30, Math.floor(460 / rows.length)));
+    const gap = Math.max(2, Math.ceil(barW * 0.25));
+    const totalW = rows.length * (barW + gap) - gap;
+    const labelStep = Math.max(1, Math.ceil(rows.length / 10));
+
+    const bars = rows.map((row, i) => {
+        const count = Number(row.count || 0);
+        const barH = Math.max(2, Math.round((count / maxCount) * chartH));
+        const x = i * (barW + gap);
+        const y = chartH - barH;
+        const dateShort = String(row.date || "").slice(5); // "MM-DD"
+        return `<g>
+            <rect x="${x}" y="${y}" width="${barW}" height="${barH}" fill="${CHART_PALETTE[0]}" rx="2" opacity="0.9">
+                <title>${escapeHtml(String(row.date))}: ${escapeHtml(String(count))}</title>
+            </rect>
+            ${i % labelStep === 0 ? `<text x="${x + barW / 2}" y="${chartH + 14}" text-anchor="middle" class="dtm-timeline-label">${escapeHtml(dateShort)}</text>` : ""}
+        </g>`;
+    }).join("");
+
+    return `
+        <div class="dtm-timeline-wrap">
+            <svg viewBox="0 0 ${totalW} ${chartH + 20}" class="dtm-timeline-svg" role="img" aria-label="Alerts timeline">
+                ${bars}
+            </svg>
+        </div>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function renderDtmDashboard(responseData) {
     const charts = responseData.charts || {};
     const summary = responseData.summary || {};
@@ -2311,55 +2447,60 @@ function renderDtmDashboard(responseData) {
                     <p><strong>Top noisy monitor:</strong> ${escapeHtml(String(summary.top_noisy_monitor || "none"))}</p>
                 </div>
             </section>
-            <div class="stats-charts-grid">
+            <div class="stats-charts-grid dtm-charts-grid">
                 <section class="stats-chart-panel">
                     <h2 class="stats-chart-title">Top Monitors by Alert Count</h2>
-                    ${renderDtmBarTable(charts.top_monitors_by_alert_count, {
-                        labelKey: "monitor_name",
-                        valueKey: "alert_count",
-                        valueTitle: "Alerts",
-                        emptyMessage: "No alerts returned for this period.",
-                    })}
+                    ${renderDtmHorizontalBars(
+                        charts.top_monitors_by_alert_count,
+                        "monitor_name", "alert_count",
+                        { emptyMessage: "No alerts returned for this period." },
+                    )}
                 </section>
                 <section class="stats-chart-panel">
                     <h2 class="stats-chart-title">Top Monitors by Risk Score</h2>
-                    ${renderDtmBarTable(charts.top_monitors_by_risk_score, {
-                        labelKey: "monitor_name",
-                        valueKey: "risk_score",
-                        valueTitle: "Risk",
-                        emptyMessage: "No risk score was computed for this period.",
-                    })}
+                    ${renderDtmHorizontalBars(
+                        charts.top_monitors_by_risk_score,
+                        "monitor_name", "risk_score",
+                        {
+                            emptyMessage: "No risk score was computed for this period.",
+                            colorFn: (row) => {
+                                const r = Number(row.risk_score || 0);
+                                return r >= 20 ? "#dc3545" : r >= 8 ? "#fd7e14" : "#28a745";
+                            },
+                        },
+                    )}
                 </section>
                 <section class="stats-chart-panel">
                     <h2 class="stats-chart-title">Alerts by Severity</h2>
-                    ${renderDtmCountTable(charts.alerts_by_severity, "severity", "Severity")}
+                    ${renderDtmSeverityDonut(charts.alerts_by_severity)}
                 </section>
                 <section class="stats-chart-panel">
                     <h2 class="stats-chart-title">Alerts by Type</h2>
-                    ${renderDtmCountTable(charts.alerts_by_type, "type", "Type")}
+                    ${renderDtmHorizontalBars(
+                        charts.alerts_by_type,
+                        "type", "count",
+                        { emptyMessage: "No alert type data for this period." },
+                    )}
                 </section>
                 <section class="stats-chart-panel">
                     <h2 class="stats-chart-title">Alerts by Status</h2>
-                    ${renderDtmCountTable(charts.alerts_by_status, "status", "Status")}
+                    ${renderDtmHorizontalBars(
+                        charts.alerts_by_status,
+                        "status", "count",
+                        { emptyMessage: "No alert status data for this period." },
+                    )}
                 </section>
-                <section class="stats-chart-panel">
+                <section class="stats-chart-panel dtm-timeline-panel">
                     <h2 class="stats-chart-title">Alerts Timeline</h2>
-                    ${renderDtmBarTable(charts.alerts_timeline, {
-                        labelKey: "date",
-                        valueKey: "count",
-                        labelTitle: "Date",
-                        valueTitle: "Alerts",
-                        emptyMessage: "No dated alerts were returned.",
-                    })}
+                    ${renderDtmTimelineChart(charts.alerts_timeline)}
                 </section>
                 <section class="stats-chart-panel">
                     <h2 class="stats-chart-title">Noisy Monitors</h2>
-                    ${renderDtmBarTable(charts.noisy_monitors, {
-                        labelKey: "monitor_name",
-                        valueKey: "noise_score",
-                        valueTitle: "Noise",
-                        emptyMessage: "No noisy monitor pattern was detected.",
-                    })}
+                    ${renderDtmHorizontalBars(
+                        charts.noisy_monitors,
+                        "monitor_name", "noise_score",
+                        { emptyMessage: "No noisy monitor pattern was detected." },
+                    )}
                 </section>
                 <section class="stats-chart-panel">
                     <h2 class="stats-chart-title">Inactive Monitors</h2>

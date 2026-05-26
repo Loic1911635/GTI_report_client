@@ -7,6 +7,12 @@ from typing import Any
 
 from docx import Document
 from docx.shared import Pt
+from backend.top_ranking_docx import (  # noqa: PLC0415
+    _build_bar_chart_xml as _bar_xml,
+    _build_pie_chart_xml as _pie_xml,
+    _insert_native_chart,
+    _safe_int,
+)
 
 
 def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> str:
@@ -96,19 +102,26 @@ def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> s
             document.add_paragraph(str(warning), style="List Bullet")
 
     document.add_heading("Chart Data", level=1)
-    document.add_paragraph(
-        "TODO: embed chart images when the frontend export pipeline passes chart images. "
-        "For now, the chart data is exported as readable tables."
-    )
     charts = _as_dict(report_data.get("charts"))
-    for title, rows in (
-        ("IoCs by entity type", charts.get("by_entity_type")),
-        ("IoCs by risk", charts.get("by_risk")),
-        ("IoCs by source type", charts.get("by_source_type")),
-        ("Recommended actions", charts.get("by_recommended_action")),
+    for title, rows, chart_type in (
+        ("IoCs by entity type", charts.get("by_entity_type"), "bar"),
+        ("IoCs by risk", charts.get("by_risk"), "pie"),
+        ("IoCs by source type", charts.get("by_source_type"), "bar"),
+        ("Recommended actions", charts.get("by_recommended_action"), "bar"),
     ):
         document.add_heading(title, level=2)
-        _add_label_value_table(document, _as_list(rows))
+        chart_rows = _as_list(rows)
+        labels = [str(_as_dict(r).get("label") or "Unknown") for r in chart_rows]
+        values = [_safe_int(_as_dict(r).get("value", 0)) for r in chart_rows]
+        if labels and any(v > 0 for v in values):
+            try:
+                xml = _pie_xml(labels, values, title) if chart_type == "pie" else _bar_xml(labels, values, title, horizontal=True)
+                height = max(2.0, min(4.0, len(labels) * 0.35 + 0.8))
+                _insert_native_chart(document, xml, width_inches=5.5, height_inches=height if chart_type == "bar" else 3.0)
+            except Exception:
+                _add_label_value_table(document, chart_rows)
+        else:
+            _add_label_value_table(document, chart_rows)
 
     analytics = _as_dict(report_data.get("analytics"))
     document.add_heading("Analyst Cross-Analysis", level=1)
@@ -132,13 +145,24 @@ def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> s
         document,
         _as_list(analytics.get("top_dangerous_indicators")),
     )
-    for title, rows in (
-        ("Risk Distribution", analytics.get("risk_distribution")),
-        ("IoC Type Distribution", analytics.get("ioc_type_distribution")),
-        ("Recommended Action Distribution", analytics.get("recommended_action_distribution")),
+    for title, rows, chart_type in (
+        ("Risk Distribution", analytics.get("risk_distribution"), "pie"),
+        ("IoC Type Distribution", analytics.get("ioc_type_distribution"), "bar"),
+        ("Recommended Action Distribution", analytics.get("recommended_action_distribution"), "bar"),
     ):
         document.add_heading(title, level=2)
-        _add_distribution_table(document, _as_list(rows))
+        dist_rows = _as_list(rows)
+        labels = [str(_as_dict(r).get("label") or "Unknown") for r in dist_rows]
+        values = [_safe_int(_as_dict(r).get("count", _as_dict(r).get("value", 0))) for r in dist_rows]
+        if labels and any(v > 0 for v in values):
+            try:
+                xml = _pie_xml(labels, values, title) if chart_type == "pie" else _bar_xml(labels, values, title, horizontal=True)
+                height = max(2.0, min(4.0, len(labels) * 0.35 + 0.8))
+                _insert_native_chart(document, xml, width_inches=5.5, height_inches=height if chart_type == "bar" else 3.0)
+            except Exception:
+                _add_distribution_table(document, dist_rows)
+        else:
+            _add_distribution_table(document, dist_rows)
 
     document.add_heading("Top Indicators Requiring Attention", level=1)
     _add_top_indicators_table(document, _as_list(report_data.get("top_indicators"))[:10])

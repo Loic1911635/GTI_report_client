@@ -1269,6 +1269,77 @@ select:focus {
     font-style: italic;
 }
 
+/* ── DTM Dashboard horizontal bar charts ──────────────────────────────────── */
+.dtm-charts-grid {
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+
+.dtm-bar-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 2px 0 4px;
+}
+
+.dtm-bar-row {
+    display: grid;
+    grid-template-columns: minmax(100px, 1.2fr) minmax(80px, 2fr) 46px;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.81rem;
+}
+
+.dtm-bar-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text, #1a2228);
+    font-weight: 600;
+}
+
+.dtm-bar-track {
+    height: 10px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(13, 127, 122, 0.1);
+}
+
+.dtm-bar-fill {
+    height: 100%;
+    min-width: 4px;
+    border-radius: 999px;
+    transition: width 0.35s ease;
+}
+
+.dtm-bar-value {
+    text-align: right;
+    font-size: 0.81rem;
+    color: var(--text-soft, #444);
+    font-weight: 700;
+}
+
+/* ── DTM Timeline vertical bar chart ──────────────────────────────────────── */
+.dtm-timeline-panel {
+    grid-column: 1 / -1;  /* full width across the grid */
+}
+
+.dtm-timeline-wrap {
+    overflow-x: auto;
+    padding-bottom: 4px;
+}
+
+.dtm-timeline-svg {
+    min-width: 260px;
+    max-height: 130px;
+    width: 100%;
+    display: block;
+}
+
+.dtm-timeline-label {
+    font-size: 10px;
+    fill: var(--text-soft, #666);
+}
+
 .mini-metric-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
