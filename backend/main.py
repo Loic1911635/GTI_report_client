@@ -32,6 +32,7 @@ from backend.gti_client import (
     lookup_domain,
     test_single_mitre_tree,
 )
+from backend.dtm_dashboard_docx import generate_dtm_dashboard_docx
 from backend.ioc_stream_docx import generate_ioc_stream_docx
 from backend.report_generator import (
     build_downloadable_filename,
@@ -220,6 +221,12 @@ class IocStreamDocxExportRequest(BaseModel):
     """Input payload for DOCX export from an existing Recent IoC Stream Sample report."""
 
     ioc_stream_report: dict[str, Any] = Field(..., description="Already computed Recent IoC Stream Sample report.")
+
+
+class DtmDashboardDocxExportRequest(BaseModel):
+    """Input payload for DOCX export from an existing DTM Dashboard result."""
+
+    dashboard_result: dict[str, Any] = Field(..., description="Already computed DTM Dashboard result.")
 
 
 class IndustrySnapshotExplorerResponse(BaseModel):
@@ -776,6 +783,34 @@ def export_ioc_stream_docx(request: IocStreamDocxExportRequest) -> FileResponse:
         raise HTTPException(
             status_code=500,
             detail=f"Recent IoC Stream Sample DOCX export failed: {exc}",
+        ) from exc
+
+
+@app.post("/export/dtm-dashboard-docx", include_in_schema=False)
+def export_dtm_dashboard_docx(request: DtmDashboardDocxExportRequest) -> FileResponse:
+    """Generate a DOCX report from an already computed DTM Dashboard result."""
+
+    try:
+        dashboard_result = dict(request.dashboard_result or {})
+        dashboard_result.pop("api_key", None)
+        dashboard_result.pop("x_api_key", None)
+
+        output_dir = Path(tempfile.gettempdir()) / "gti_report_client"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / "gti-dtm-dashboard.docx"
+        generated_path = generate_dtm_dashboard_docx(
+            dashboard_result=dashboard_result,
+            output_path=str(output_path),
+        )
+        return FileResponse(
+            generated_path,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            filename=Path(generated_path).name,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"DTM Dashboard DOCX export failed: {exc}",
         ) from exc
 
 

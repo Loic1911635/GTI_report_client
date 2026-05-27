@@ -60,6 +60,7 @@ const iocStreamCustomDatesWrapper = document.getElementById("ioc_stream_custom_d
 const iocStreamEntityTypeField = document.getElementById("ioc_stream_entity_type");
 const iocStreamOriginField = document.getElementById("ioc_stream_origin");
 const iocStreamDocxButton = document.getElementById("ioc-stream-docx-button");
+const dtmDashboardDocxButton = document.getElementById("dtm-dashboard-docx-button");
 const dtmDashboardSinceField = document.getElementById("dtm_dashboard_since");
 const dtmDashboardUntilField = document.getElementById("dtm_dashboard_until");
 const dtmDashboardMaxPagesField = document.getElementById("dtm_dashboard_max_pages");
@@ -406,6 +407,17 @@ function setIocStreamDocxState(isReady, isExporting = false) {
     iocStreamDocxButton.hidden = !isReady;
     iocStreamDocxButton.disabled = !isReady || isExporting;
     iocStreamDocxButton.textContent = isExporting
+        ? "Exporting Word report..."
+        : "Export Word Report";
+}
+
+function setDtmDashboardDocxState(isReady, isExporting = false) {
+    if (!dtmDashboardDocxButton) {
+        return;
+    }
+    dtmDashboardDocxButton.hidden = !isReady;
+    dtmDashboardDocxButton.disabled = !isReady || isExporting;
+    dtmDashboardDocxButton.textContent = isExporting
         ? "Exporting Word report..."
         : "Export Word Report";
 }
@@ -3314,6 +3326,58 @@ async function exportIocStreamDocx() {
     }
 }
 
+async function exportDtmDashboardDocx() {
+    if (!lastDtmDashboardResponse) {
+        showMessage("Run the DTM Dashboard before exporting a Word report.", "error");
+        return;
+    }
+
+    setDtmDashboardDocxState(true, true);
+    updateStatus("Exporting", "running");
+    clearMessage();
+
+    try {
+        const payload = { dashboard_result: { ...lastDtmDashboardResponse } };
+        const response = await fetch("/export/dtm-dashboard-docx", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+            let detail = "Word export failed.";
+            try {
+                const errorPayload = await response.json();
+                detail = errorPayload.detail || detail;
+            } catch (_) {
+                // Keep the generic message when the backend returned a non-JSON error.
+            }
+            throw new Error(detail);
+        }
+
+        const reportBlob = await response.blob();
+        const contentDisposition = response.headers.get("content-disposition") || "";
+        const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+        const filename = filenameMatch?.[1] || "gti-dtm-dashboard.docx";
+        const downloadUrl = URL.createObjectURL(reportBlob);
+        const downloadLink = document.createElement("a");
+        downloadLink.href = downloadUrl;
+        downloadLink.download = filename;
+        document.body.append(downloadLink);
+        downloadLink.click();
+        downloadLink.remove();
+        URL.revokeObjectURL(downloadUrl);
+
+        updateStatus("Success", "success");
+        showMessage("DTM Dashboard Word report exported.", "success");
+    } catch (error) {
+        updateStatus("Error", "error");
+        showMessage(error.message || "Word export failed.", "error");
+    } finally {
+        setDtmDashboardDocxState(Boolean(lastDtmDashboardResponse), false);
+    }
+}
+
 async function runIocStreamReport() {
     if (!reportForm.reportValidity()) {
         return;
@@ -3397,6 +3461,7 @@ async function runDtmDashboard() {
 
         lastDtmDashboardResponse = responseData;
         renderDtmDashboard(responseData);
+        setDtmDashboardDocxState(true);
         switchToTab("dtm-dashboard");
         rawJsonOutput.textContent = includeRaw
             ? JSON.stringify(responseData, null, 2)
@@ -3711,6 +3776,7 @@ dtmAlertsButton.addEventListener("click", testDtmAlerts);
 dtmDashboardButton?.addEventListener("click", runDtmDashboard);
 iocStreamButton?.addEventListener("click", runIocStreamReport);
 iocStreamDocxButton?.addEventListener("click", exportIocStreamDocx);
+dtmDashboardDocxButton?.addEventListener("click", exportDtmDashboardDocx);
 iocStreamCollectionModeField?.addEventListener("change", syncIocStreamCollectionControls);
 iocStreamPagesToFetchField?.addEventListener("change", syncIocStreamCollectionControls);
 iocStreamTimeWindowField?.addEventListener("change", syncIocStreamCollectionControls);
