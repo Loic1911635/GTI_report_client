@@ -2730,19 +2730,17 @@ function RecentExposureCollectionSummary(responseData) {
         ? diagnostics.page_diagnostics
         : (Array.isArray(collection.page_diagnostics) ? collection.page_diagnostics : []);
     const collectionMode = collection.collection_mode || responseData.technical_details?.request_params?.collection_mode || "recent_pages";
-    const modeLabel = collectionMode === "time_window" ? "Time window" : "Recent chronological sample";
+    const modeLabel = collectionMode === "time_window" ? "GTI date-filtered sample" : "Recent chronological sample";
     const stoppedReason = String(collection.stopped_reason || "unknown").replaceAll("_", " ");
     const earliestFetchedTimestamp = collection.earliest_fetched_timestamp || responseData.summary?.earliest_fetched_timestamp || collection.earliest_timestamp || responseData.summary?.earliest_timestamp;
     const latestFetchedTimestamp = collection.latest_fetched_timestamp || responseData.summary?.latest_fetched_timestamp || collection.latest_timestamp || responseData.summary?.latest_timestamp;
-    const earliestKeptTimestamp = collection.earliest_kept_timestamp || responseData.summary?.earliest_kept_timestamp || collection.earliest_timestamp || responseData.summary?.earliest_timestamp;
-    const latestKeptTimestamp = collection.latest_kept_timestamp || responseData.summary?.latest_kept_timestamp || collection.latest_timestamp || responseData.summary?.latest_timestamp;
+    const earliestParsedTimestamp = collection.earliest_fetched_timestamp || responseData.summary?.earliest_fetched_timestamp || collection.earliest_timestamp || responseData.summary?.earliest_timestamp;
+    const latestParsedTimestamp = collection.latest_fetched_timestamp || responseData.summary?.latest_fetched_timestamp || collection.latest_timestamp || responseData.summary?.latest_timestamp;
     const recommendation = collection.recommendation || diagnostics.recommendation || "";
-    const filteringApplied = collection.time_window_filtering_applied ?? diagnostics.time_window_filtering_applied;
-    const localInsideWindowCount = collection.local_inside_window_count ?? diagnostics.local_inside_window_count;
-    const insideWindowValue = localInsideWindowCount ?? collection.iocs_inside_window ?? responseData.summary?.iocs_inside_window ?? collection.raw_ioc_count ?? 0;
-    const insideWindowHint = collectionMode === "time_window" ? "validated" : "kept";
-    const serverFilterUnverified = collection.coverage_status === "server_filter_unverified";
-    const serverDateDiagnosticsLine = collectionMode === "time_window" && collection.server_side_date_filter_attempted ? `<p class="compact-note">Server date filter returned: ${escapeHtml(String(collection.server_side_date_filter_returned_count ?? collection.server_side_date_filter_item_count ?? 0))}. Local inside window: ${escapeHtml(String(localInsideWindowCount ?? 0))}. Local outside window: ${escapeHtml(String(collection.local_outside_window_count ?? diagnostics.local_outside_window_count ?? 0))}.</p>` : "";
+    const returnedByDateFilter = collection.raw_iocs_returned ?? collection.server_side_date_filter_returned_count ?? collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0;
+    const insideWindowValue = collectionMode === "time_window" ? returnedByDateFilter : (collection.iocs_inside_window ?? responseData.summary?.iocs_inside_window ?? collection.raw_ioc_count ?? 0);
+    const insideWindowHint = collectionMode === "time_window" ? "GTI filter" : "kept";
+    const serverDateDiagnosticsLine = collectionMode === "time_window" && collection.server_side_date_filter_attempted ? `<p class="compact-note">GTI date filter: ${escapeHtml(String(collection.server_side_date_filter_string || "n/a"))}. Raw IoCs returned: ${escapeHtml(String(returnedByDateFilter))}.</p>` : "";
     const streamTimestampFields = diagnostics.stream_timestamp_fields_seen || collection.stream_timestamp_fields_seen || [];
     const objectTimestampFields = diagnostics.object_metadata_timestamp_fields_seen || collection.object_metadata_timestamp_fields_seen || [];
     const rawTimestampDiagnostics = diagnostics.raw_item_timestamp_diagnostics || collection.raw_item_timestamp_diagnostics || [];
@@ -2767,7 +2765,7 @@ function RecentExposureCollectionSummary(responseData) {
         ["Max Pages", collection.max_pages ?? collection.requested_pages ?? "n/a", "safety cap"],
         ["Page Size", collection.page_size ?? responseData.summary?.page_size ?? "n/a", "API limit"],
         ["Raw IoCs Fetched", collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0, "before filtering"],
-        ["Inside Window", insideWindowValue, insideWindowHint],
+        [collectionMode === "time_window" ? "GTI Date Filter Returned" : "Inside Window", insideWindowValue, insideWindowHint],
         ["Unique IoCs", collection.unique_ioc_count ?? responseData.summary?.unique_ioc_count ?? 0, "deduped"],
         ["Duplicates Removed", collection.duplicates_removed ?? responseData.summary?.duplicates_removed ?? 0, "duplicates"],
         ["Enriched", collection.total_enriched ?? responseData.summary?.total_enriched ?? 0, "IoCs"],
@@ -2775,8 +2773,8 @@ function RecentExposureCollectionSummary(responseData) {
         ["Coverage", collection.coverage_status || "n/a", "time window"],
         ["Earliest Fetched", formatTimestampForReport(earliestFetchedTimestamp), "timestamp"],
         ["Latest Fetched", formatTimestampForReport(latestFetchedTimestamp), "timestamp"],
-        ["Earliest Kept", formatTimestampForReport(earliestKeptTimestamp), "timestamp"],
-        ["Latest Kept", formatTimestampForReport(latestKeptTimestamp), "timestamp"],
+        ["Earliest Parsed", formatTimestampForReport(earliestParsedTimestamp), "diagnostic only"],
+        ["Latest Parsed", formatTimestampForReport(latestParsedTimestamp), "diagnostic only"],
     ];
     const diagnosticsTable = pageDiagnostics.length ? `
         <details class="diagnostics-block">
@@ -2854,17 +2852,16 @@ function RecentExposureCollectionSummary(responseData) {
             <p><strong>Max pages:</strong> ${escapeHtml(String(collection.max_pages ?? collection.requested_pages ?? "n/a"))}</p>
             <p><strong>Page size:</strong> ${escapeHtml(String(collection.page_size ?? responseData.summary?.page_size ?? "n/a"))}</p>
             <p><strong>Raw IoCs fetched:</strong> ${escapeHtml(String(collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0))}</p>
-            <p><strong>IoCs inside selected window:</strong> ${escapeHtml(String(insideWindowValue))}</p>
+            <p><strong>${collectionMode === "time_window" ? "IoCs returned by GTI date filter" : "IoCs inside selected window"}:</strong> ${escapeHtml(String(insideWindowValue))}</p>
             <p><strong>Unique IoCs after deduplication:</strong> ${escapeHtml(String(collection.unique_ioc_count ?? responseData.summary?.unique_ioc_count ?? 0))}</p>
             <p><strong>Duplicates removed:</strong> ${escapeHtml(String(collection.duplicates_removed ?? responseData.summary?.duplicates_removed ?? 0))}</p>
             <p><strong>Stopped reason:</strong> ${escapeHtml(String(stoppedReason))}</p>
-            <p><strong>Earliest fetched timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(earliestFetchedTimestamp)))}</p>
-            <p><strong>Latest fetched timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(latestFetchedTimestamp)))}</p>
-            <p><strong>Earliest kept timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(earliestKeptTimestamp)))}</p>
-            <p><strong>Latest kept timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(latestKeptTimestamp)))}</p>
+            ${collectionMode === "time_window" ? "" : `<p><strong>Earliest fetched timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(earliestFetchedTimestamp)))}</p>`}
+            ${collectionMode === "time_window" ? "" : `<p><strong>Latest fetched timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(latestFetchedTimestamp)))}</p>`}
+            <p><strong>Earliest parsed timestamp (diagnostic only):</strong> ${escapeHtml(String(formatTimestampForReport(earliestParsedTimestamp)))}</p>
+            <p><strong>Latest parsed timestamp (diagnostic only):</strong> ${escapeHtml(String(formatTimestampForReport(latestParsedTimestamp)))}</p>
             ${collectionMode === "time_window" ? `<p><strong>Coverage status:</strong> ${escapeHtml(String(collection.coverage_status || "unknown"))}</p>` : ""}
-            ${collectionMode === "time_window" && filteringApplied !== undefined ? `<p><strong>Time-window filtering applied:</strong> ${escapeHtml(String(Boolean(filteringApplied)))}</p>` : ""}
-            ${serverFilterUnverified ? `<p class="compact-note">Server date filter returned results, but local timestamp validation found items outside the selected range.</p>` : ""}
+            ${collectionMode === "time_window" ? `<p><strong>GTI date filter sent:</strong> ${escapeHtml(String(collection.server_side_date_filter_string || "n/a"))}</p>` : ""}
             ${recommendation ? `<p><strong>Recommendation:</strong> ${escapeHtml(String(recommendation))}</p>` : ""}
             <div class="kpi-grid ioc-summary-grid">
                 ${cards.map(([label, value, hint]) => `
@@ -2875,7 +2872,7 @@ function RecentExposureCollectionSummary(responseData) {
                     </div>
                 `).join("")}
             </div>
-            <p class="compact-note">${collectionMode === "time_window" ? (filteringApplied === false ? "IoC Stream was fetched chronologically, but local time-window filtering was not applied because no stream notification timestamps were exposed." : "IoC Stream was fetched chronologically and then locally filtered to the selected window.") : "IoC Stream is chronological. This report summarizes the recent pages returned by the API, not a guaranteed complete time window."}</p>
+            <p class="compact-note">${collectionMode === "time_window" ? "IoC Stream was fetched with the GTI date filter. Parsed timestamps are shown for diagnostics only." : "IoC Stream is chronological. This report summarizes the recent pages returned by the API, not a guaranteed complete time window."}</p>
             ${warnings.length ? `<div class="diagnostic-warning compact">${warnings.map((warning) => `<p>${escapeHtml(String(warning))}</p>`).join("")}</div>` : ""}
             ${diagnosticsTable}
             ${timestampDiagnosticsTable}

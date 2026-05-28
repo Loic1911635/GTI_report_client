@@ -80,15 +80,6 @@ IOC_STREAM_NO_TIMESTAMPS_WARNING = (
     "GTI returned IoCs, but no usable stream notification timestamps were exposed. "
     "Time-window filtering could not be applied safely."
 )
-IOC_STREAM_SERVER_DATE_FILTER_FALLBACK_WARNING = (
-    "Server-side date filter did not return usable results; fallback local filtering was used."
-)
-IOC_STREAM_SERVER_DATE_FILTER_UNVERIFIED_WARNING = (
-    "GTI returned items outside the requested date window; local validation was applied."
-)
-IOC_STREAM_SERVER_DATE_FILTER_NO_TIMESTAMPS_WARNING = (
-    "GTI did not expose usable stream timestamps, so date coverage cannot be verified."
-)
 IOC_STREAM_RECENT_MODE_RECOMMENDATION = (
     "Use Recent chronological sample mode for this dataset."
 )
@@ -543,7 +534,7 @@ def fetch_ioc_stream(
     time_window: str | None = None,
     collection_mode: str = "recent_pages",
 ) -> dict[str, Any]:
-    """Fetch recent IoC Stream pages or a locally-filtered time window."""
+    """Fetch recent IoC Stream pages or a GTI date-filtered sample."""
 
     normalized_api_key = api_key.strip()
     normalized_collection_mode = (collection_mode or "recent_pages").strip().casefold()
@@ -580,10 +571,6 @@ def fetch_ioc_stream(
         if normalized_collection_mode == "time_window"
         else None
     )
-    start_datetime = (
-        time_window_metadata["start_datetime"] if time_window_metadata else None
-    )
-    end_datetime = time_window_metadata["end_datetime"] if time_window_metadata else None
     filters: list[str] = []
     if normalized_entity_type != "all":
         filters.append(f"entity_type:{normalized_entity_type}")
@@ -610,15 +597,14 @@ def fetch_ioc_stream(
     }
     if combined_filters:
         base_params["filter"] = " ".join(combined_filters)
-    local_filter_params: dict[str, Any] = {
-        "descriptors_only": "true" if descriptors_only else "false",
-        "order": "date",
-    }
-    if filters:
-        local_filter_params["filter"] = " ".join(filters)
     request_params: dict[str, Any] = {
         **base_params,
         "collection_mode": normalized_collection_mode,
+        "collection_mode_label": (
+            "GTI date-filtered sample"
+            if normalized_collection_mode == "time_window"
+            else "Recent chronological sample"
+        ),
         "pages_to_fetch": normalized_pages_to_fetch,
         "max_pages": normalized_pages_to_fetch,
         "api_page_limit": IOC_STREAM_API_PAGE_LIMIT,
@@ -835,15 +821,10 @@ def fetch_ioc_stream(
         ),
         "server_side_date_filter_item_count": 0,
         "server_side_date_filter_returned_count": 0,
-        "local_inside_window_count": 0,
-        "local_outside_window_count": 0,
-        "earliest_outside_window_timestamp": None,
-        "latest_outside_window_timestamp": None,
         "fallback_used": False,
     }
 
     warnings: list[str] = []
-    server_side_filter_used = False
     attempt_result = fetch_pages_with_params(base_params)
     if use_server_side_date_filter:
         first_status_code = int(attempt_result["final_status_code"])
@@ -858,18 +839,10 @@ def fetch_ioc_stream(
             server_side_date_filter_metadata[
                 "server_side_date_filter_status"
             ] = "success"
-            server_side_filter_used = True
-        elif first_status_code in {200, 400, 404} and server_item_count == 0:
+        elif first_status_code == 200 and server_item_count == 0:
             server_side_date_filter_metadata[
                 "server_side_date_filter_status"
-            ] = (
-                "empty"
-                if first_status_code == 200
-                else f"http_{first_status_code}"
-            )
-            server_side_date_filter_metadata["fallback_used"] = True
-            warnings = [IOC_STREAM_SERVER_DATE_FILTER_FALLBACK_WARNING]
-            attempt_result = fetch_pages_with_params(local_filter_params)
+            ] = "empty"
         else:
             server_side_date_filter_metadata[
                 "server_side_date_filter_status"
@@ -896,76 +869,7 @@ def fetch_ioc_stream(
             "warnings": _ioc_stream_warnings(normalized_collection_mode, warnings),
         }
 
-    time_window_without_stream_timestamps = (
-        normalized_collection_mode == "time_window"
-        and not server_side_filter_used
-        and bool(fetched_items)
-        and _oldest_stream_event_timestamp(fetched_items) is None
-    )
-    if time_window_without_stream_timestamps:
-        stopped_reason = "no_stream_timestamps"
-        warnings.append(IOC_STREAM_NO_TIMESTAMPS_WARNING)
-
-    window_validation_metadata: dict[str, Any] | None = None
-    locally_validated_items: list[dict[str, Any]] = []
-    if (
-        normalized_collection_mode == "time_window"
-        and start_datetime is not None
-        and end_datetime is not None
-    ):
-        window_validation = _validate_ioc_stream_items_against_time_window(
-            fetched_items,
-            start_datetime,
-            end_datetime,
-        )
-        locally_validated_items = window_validation["inside_items"]
-        window_validation_metadata = {
-            "local_inside_window_count": window_validation[
-                "local_inside_window_count"
-            ],
-            "local_outside_window_count": window_validation[
-                "local_outside_window_count"
-            ],
-            "earliest_outside_window_timestamp": (
-                window_validation["earliest_outside_window_timestamp"].isoformat()
-                if window_validation["earliest_outside_window_timestamp"]
-                else None
-            ),
-            "latest_outside_window_timestamp": (
-                window_validation["latest_outside_window_timestamp"].isoformat()
-                if window_validation["latest_outside_window_timestamp"]
-                else None
-            ),
-        }
-        if use_server_side_date_filter:
-            server_side_date_filter_metadata.update(window_validation_metadata)
-            accepted_count = (
-                window_validation["local_inside_window_count"]
-                + window_validation["local_outside_window_count"]
-            )
-            if accepted_count == 0 and fetched_items:
-                warnings.append(IOC_STREAM_SERVER_DATE_FILTER_NO_TIMESTAMPS_WARNING)
-            elif window_validation["local_outside_window_count"] > 0:
-                warnings.append(IOC_STREAM_SERVER_DATE_FILTER_UNVERIFIED_WARNING)
-
-    if time_window_without_stream_timestamps:
-        kept_items = list(fetched_items)
-    elif (
-        normalized_collection_mode == "time_window"
-        and start_datetime is not None
-        and end_datetime is not None
-    ):
-        accepted_count = (
-            (window_validation_metadata or {}).get("local_inside_window_count", 0)
-            + (window_validation_metadata or {}).get("local_outside_window_count", 0)
-        )
-        kept_items = (
-            list(locally_validated_items)
-            if accepted_count
-            else list(fetched_items)
-        )
-    else:
-        kept_items = list(fetched_items)
+    kept_items = list(fetched_items)
     collection_metadata = _build_ioc_stream_collection_metadata(
         fetched_items=fetched_items,
         kept_items=kept_items,
@@ -976,7 +880,6 @@ def fetch_ioc_stream(
         collection_mode=normalized_collection_mode,
         time_window_metadata=time_window_metadata,
         server_side_date_filter_metadata=server_side_date_filter_metadata,
-        window_validation_metadata=window_validation_metadata,
     )
     collection_metadata["page_diagnostics"] = page_diagnostics
     warnings = _ioc_stream_warnings(normalized_collection_mode, warnings)
@@ -1252,7 +1155,12 @@ def build_ioc_stream_report(
         "duplicate_count": duplicate_count,
         "duplicates_removed": duplicate_count,
         "unique_ioc_count": len(indicators),
+        "unique_iocs_after_deduplication": len(indicators),
         "raw_ioc_count": collection_metadata.get("raw_ioc_count", len(raw_indicators)),
+        "raw_iocs_returned": collection_metadata.get(
+            "raw_iocs_returned",
+            collection_metadata.get("raw_ioc_count", len(raw_indicators)),
+        ),
         "iocs_inside_window": collection_metadata.get(
             "iocs_inside_window",
             len(raw_indicators),
@@ -1321,30 +1229,19 @@ def build_ioc_stream_report(
             "server_side_date_filter_returned_count",
             collection_metadata.get("server_side_date_filter_item_count", 0),
         ),
-        "local_inside_window_count": collection_metadata.get(
-            "local_inside_window_count",
-            collection_metadata.get("iocs_inside_window", 0),
-        ),
-        "local_outside_window_count": collection_metadata.get(
-            "local_outside_window_count",
-            0,
-        ),
-        "earliest_outside_window_timestamp": collection_metadata.get(
-            "earliest_outside_window_timestamp"
-        ),
-        "latest_outside_window_timestamp": collection_metadata.get(
-            "latest_outside_window_timestamp"
-        ),
         "fallback_used": collection_metadata.get("fallback_used", False),
+        "enriched_count": enrichment_succeeded,
     }
     collection_metadata["total_collected"] = len(indicators)
     collection_metadata["total_enriched"] = enrichment_succeeded
+    collection_metadata["enriched_count"] = enrichment_succeeded
     collection_metadata["unique_ioc_count"] = len(indicators)
     collection_metadata["unique_iocs_after_deduplication"] = len(indicators)
     collection_metadata["duplicate_count"] = duplicate_count
     collection_metadata["duplicates_removed"] = duplicate_count
     collection_metadata.setdefault("raw_ioc_count", len(raw_indicators))
     collection_metadata.setdefault("raw_iocs_fetched", len(raw_indicators))
+    collection_metadata.setdefault("raw_iocs_returned", len(raw_indicators))
     collection_metadata.setdefault("iocs_inside_window", len(raw_indicators))
     collection_metadata.setdefault(
         "iocs_inside_selected_window",
@@ -1398,7 +1295,12 @@ def build_ioc_stream_report(
         "pages_fetched": collection_metadata.get("pages_fetched", 0),
         "page_size": collection_metadata.get("page_size", IOC_STREAM_API_PAGE_LIMIT),
         "total_enriched": enrichment_succeeded,
+        "enriched_count": enrichment_succeeded,
         "raw_ioc_count": collection_metadata.get("raw_ioc_count", len(raw_indicators)),
+        "raw_iocs_returned": collection_metadata.get(
+            "raw_iocs_returned",
+            collection_metadata.get("raw_ioc_count", len(raw_indicators)),
+        ),
         "iocs_inside_window": collection_metadata.get(
             "iocs_inside_window",
             len(raw_indicators),
@@ -3880,25 +3782,7 @@ def _filter_mock_ioc_stream_payload(
         fetched_items.append(item)
 
     stopped_reason = "no_more_pages"
-    if collection_mode == "time_window" and time_window_metadata:
-        if _oldest_stream_event_timestamp(fetched_items) is None and fetched_items:
-            stopped_reason = "no_stream_timestamps"
-
-    if collection_mode == "time_window" and time_window_metadata:
-        if stopped_reason == "no_stream_timestamps":
-            kept_items = list(fetched_items)
-        else:
-            kept_items = [
-                item
-                for item in fetched_items
-                if _ioc_item_is_in_time_window(
-                    item,
-                    time_window_metadata["start_datetime"],
-                    time_window_metadata["end_datetime"],
-                )
-            ]
-    else:
-        kept_items = list(fetched_items)
+    kept_items = list(fetched_items)
 
     collection_metadata = _build_ioc_stream_collection_metadata(
         fetched_items=fetched_items,
@@ -4171,16 +4055,43 @@ def _resolve_ioc_stream_time_window(
 
     now = datetime.now(timezone.utc)
     if normalized_window == "last_24h":
-        start_datetime = now - timedelta(hours=24)
-        end_datetime = now
+        today = now.date()
+        start_datetime = datetime.combine(
+            today - timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        )
+        end_datetime = datetime.combine(
+            today + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        )
         label = "Last 24h"
     elif normalized_window == "last_7d":
-        start_datetime = now - timedelta(days=7)
-        end_datetime = now
+        today = now.date()
+        start_datetime = datetime.combine(
+            today - timedelta(days=7),
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        )
+        end_datetime = datetime.combine(
+            today + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        )
         label = "Last 7d"
     elif normalized_window == "last_30d":
-        start_datetime = now - timedelta(days=30)
-        end_datetime = now
+        today = now.date()
+        start_datetime = datetime.combine(
+            today - timedelta(days=30),
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        )
+        end_datetime = datetime.combine(
+            today + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        )
         label = "Last 30d"
     else:
         normalized_start_date = _normalize_ioc_stream_date(start_date, "start_date")
@@ -4233,61 +4144,6 @@ def _build_ioc_stream_server_side_date_filter(
         f"date:{time_window_metadata['start_date']}+ "
         f"date:{time_window_metadata['end_date']}-"
     )
-
-
-def _ioc_item_is_in_time_window(
-    item: dict[str, Any],
-    start_datetime: datetime,
-    end_datetime: datetime,
-) -> bool:
-    item_datetime = extract_stream_event_datetime(item)
-    if item_datetime is None:
-        return False
-    return start_datetime <= item_datetime <= end_datetime
-
-
-def _extract_locally_validated_stream_datetime(
-    item: dict[str, Any],
-) -> datetime | None:
-    for candidate in _find_ioc_date_fields(item):
-        if candidate["classification"] != "stream_timestamp":
-            continue
-        field_name = str(candidate.get("key") or "")
-        if field_name not in IOC_STREAM_EVENT_TIMESTAMP_FIELDS:
-            continue
-        item_datetime = candidate.get("parsed_datetime")
-        if isinstance(item_datetime, datetime):
-            return item_datetime
-    return None
-
-
-def _validate_ioc_stream_items_against_time_window(
-    items: list[dict[str, Any]],
-    start_datetime: datetime,
-    end_datetime: datetime,
-) -> dict[str, Any]:
-    inside_items: list[dict[str, Any]] = []
-    outside_timestamps: list[datetime] = []
-    for item in items:
-        item_datetime = _extract_locally_validated_stream_datetime(item)
-        if item_datetime is None:
-            continue
-        if start_datetime <= item_datetime <= end_datetime:
-            inside_items.append(item)
-        else:
-            outside_timestamps.append(item_datetime)
-
-    return {
-        "inside_items": inside_items,
-        "local_inside_window_count": len(inside_items),
-        "local_outside_window_count": len(outside_timestamps),
-        "earliest_outside_window_timestamp": (
-            min(outside_timestamps) if outside_timestamps else None
-        ),
-        "latest_outside_window_timestamp": (
-            max(outside_timestamps) if outside_timestamps else None
-        ),
-    }
 
 
 def _stream_event_timestamps_with_fields(
@@ -4357,34 +4213,9 @@ def _ioc_stream_coverage_status(
 ) -> str | None:
     if collection_mode != "time_window":
         return None
-    if not fetched_items or not time_window_metadata:
+    if not time_window_metadata:
         return "unavailable"
-    if (
-        server_side_date_filter_metadata
-        and server_side_date_filter_metadata.get("server_side_date_filter_status")
-        == "success"
-        and not server_side_date_filter_metadata.get("fallback_used")
-    ):
-        if _safe_int(
-            server_side_date_filter_metadata.get("local_inside_window_count")
-        ) + _safe_int(
-            server_side_date_filter_metadata.get("local_outside_window_count")
-        ) == 0:
-            return "unavailable"
-        if _safe_int(
-            server_side_date_filter_metadata.get("local_outside_window_count")
-        ) > 0:
-            return "server_filter_unverified"
-        return "server_filtered_sample"
-    if stopped_reason == "no_stream_timestamps":
-        return "unavailable"
-    if _oldest_stream_event_timestamp(fetched_items) is None:
-        return "unavailable"
-    if stopped_reason == "no_more_pages":
-        return "no_more_pages"
-    if stopped_reason == "requested_pages_reached":
-        return "sample_filtered"
-    return "sample_filtered"
+    return "gti_date_filtered_sample"
 
 
 def _ioc_stream_warnings(collection_mode: str, warnings: list[str]) -> list[str]:
@@ -4474,7 +4305,6 @@ def _build_ioc_stream_collection_metadata(
     time_window_metadata: dict[str, Any] | None,
     stop_timestamp_field: str | None = None,
     server_side_date_filter_metadata: dict[str, Any] | None = None,
-    window_validation_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     server_side_date_filter_metadata = server_side_date_filter_metadata or {
         "server_side_date_filter_attempted": False,
@@ -4482,26 +4312,13 @@ def _build_ioc_stream_collection_metadata(
         "server_side_date_filter_status": "not_attempted",
         "server_side_date_filter_item_count": 0,
         "server_side_date_filter_returned_count": 0,
-        "local_inside_window_count": 0,
-        "local_outside_window_count": 0,
-        "earliest_outside_window_timestamp": None,
-        "latest_outside_window_timestamp": None,
         "fallback_used": False,
     }
-    window_validation_metadata = window_validation_metadata or {}
     earliest_fetched_timestamp = _oldest_stream_event_timestamp(fetched_items)
     latest_fetched_timestamp = _newest_stream_event_timestamp(fetched_items)
     earliest_kept_timestamp = _oldest_stream_event_timestamp(kept_items)
     latest_kept_timestamp = _newest_stream_event_timestamp(kept_items)
-    inside_window_count = _safe_int(
-        window_validation_metadata.get("local_inside_window_count"),
-        len(kept_items),
-    )
-    time_window_filtering_applied = (
-        collection_mode == "time_window"
-        and time_window_metadata is not None
-        and stopped_reason != "no_stream_timestamps"
-    )
+    time_window_filtering_applied = False
     coverage_status = _ioc_stream_coverage_status(
         collection_mode,
         stopped_reason,
@@ -4516,12 +4333,19 @@ def _build_ioc_stream_collection_metadata(
     )
     return {
         "collection_mode": collection_mode,
+        "collection_mode_label": (
+            "GTI date-filtered sample"
+            if collection_mode == "time_window"
+            else "Recent chronological sample"
+        ),
         "time_window": _public_ioc_time_window_metadata(time_window_metadata),
         "total_collected": len(kept_items),
         "raw_ioc_count": len(fetched_items),
         "raw_iocs_fetched": len(fetched_items),
-        "iocs_inside_window": inside_window_count,
-        "iocs_inside_selected_window": inside_window_count,
+        "raw_iocs_returned": len(fetched_items),
+        "iocs_inside_window": len(kept_items),
+        "iocs_inside_selected_window": len(kept_items),
+        "iocs_returned_by_gti_date_filter": len(kept_items),
         "unique_iocs_after_deduplication": _unique_ioc_item_count(kept_items),
         "time_window_filtering_applied": time_window_filtering_applied,
         "recommendation": (
@@ -4554,7 +4378,6 @@ def _build_ioc_stream_collection_metadata(
         ),
         "stopped_reason": stopped_reason,
         **timestamp_diagnostics,
-        **window_validation_metadata,
         **(server_side_date_filter_metadata or {}),
         **({"coverage_status": coverage_status} if coverage_status else {}),
     }
