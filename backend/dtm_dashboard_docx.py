@@ -11,6 +11,10 @@ from docx.shared import Pt, RGBColor
 from backend.top_ranking_docx import (  # noqa: PLC0415
     _build_bar_chart_xml as _bar_xml,
     _build_pie_chart_xml as _pie_xml,
+    _build_donut_chart_xml as _donut_xml,
+    _build_line_chart_xml as _line_xml,
+    _build_area_chart_xml as _area_xml,
+    _build_stacked_bar_chart_xml as _stacked_xml,
     _insert_native_chart,
     _safe_int,
     _shade_cell,
@@ -88,6 +92,7 @@ def generate_dtm_dashboard_docx(
     document.add_page_break()
     document.add_heading("Charts", level=1)
 
+    # ── Severity distribution: pie + donut + bar ─────────────────────────────
     _add_chart_section(
         document,
         title="Alerts by Severity",
@@ -98,7 +103,76 @@ def generate_dtm_dashboard_docx(
         width=4.5,
         height=3.0,
     )
+    _add_chart_section(
+        document,
+        title="Alerts by Severity — Donut",
+        rows=charts.get("alerts_by_severity", []),
+        label_key="severity",
+        value_key="count",
+        chart_type="donut",
+        width=4.5,
+        height=3.0,
+    )
+    _add_chart_section(
+        document,
+        title="Alerts by Severity — Bars",
+        rows=charts.get("alerts_by_severity", []),
+        label_key="severity",
+        value_key="count",
+        chart_type="bar",
+        width=5.5,
+    )
 
+    # ── Monitors with vs without alerts (new) ────────────────────────────────
+    monitors_with = _safe_int(summary.get("monitors_with_alerts"))
+    monitors_without = _safe_int(summary.get("monitors_without_alerts"))
+    if monitors_with + monitors_without > 0:
+        _add_chart_section(
+            document,
+            title="Monitors with Alerts vs Inactive",
+            rows=[
+                {"label": "With alerts", "count": monitors_with},
+                {"label": "Inactive", "count": monitors_without},
+            ],
+            label_key="label",
+            value_key="count",
+            chart_type="pie",
+            width=4.5,
+            height=3.0,
+        )
+        _add_chart_section(
+            document,
+            title="Monitors with Alerts vs Inactive — Donut",
+            rows=[
+                {"label": "With alerts", "count": monitors_with},
+                {"label": "Inactive", "count": monitors_without},
+            ],
+            label_key="label",
+            value_key="count",
+            chart_type="donut",
+            width=4.5,
+            height=3.0,
+        )
+
+    # ── Quota usage (new) ────────────────────────────────────────────────────
+    quota_used = _safe_int(quota.get("monitor_count"))
+    quota_remaining = _safe_int(quota.get("remaining_estimate"))
+    if quota_used + quota_remaining > 0:
+        _add_chart_section(
+            document,
+            title="Monitor Quota Usage",
+            rows=[
+                {"label": "Used", "count": quota_used},
+                {"label": "Remaining", "count": quota_remaining},
+            ],
+            label_key="label",
+            value_key="count",
+            chart_type="donut",
+            width=4.5,
+            height=3.0,
+        )
+
+    # ── Top Monitors by Alert Count ──────────────────────────────────────────
     _add_chart_section(
         document,
         title="Top Monitors by Alert Count",
@@ -108,7 +182,18 @@ def generate_dtm_dashboard_docx(
         chart_type="bar",
         width=6.0,
     )
+    _add_chart_section(
+        document,
+        title="Top Monitors by Alert Count — Columns",
+        rows=charts.get("top_monitors_by_alert_count", []),
+        label_key="monitor_name",
+        value_key="alert_count",
+        chart_type="timeline",
+        width=6.0,
+        height=3.0,
+    )
 
+    # ── Top Monitors by Risk Score ───────────────────────────────────────────
     _add_chart_section(
         document,
         title="Top Monitors by Risk Score",
@@ -119,6 +204,48 @@ def generate_dtm_dashboard_docx(
         width=6.0,
     )
 
+    # ── High / Medium / Low breakdown per monitor (new stacked bars) ─────────
+    risk_rows = _as_list(charts.get("top_monitors_by_risk_score", []))
+    if risk_rows:
+        risk_cats = [str(_as_dict(r).get("monitor_name") or "Unknown") for r in risk_rows]
+        high_vals = [_safe_int(_as_dict(r).get("high", 0)) for r in risk_rows]
+        med_vals = [_safe_int(_as_dict(r).get("medium", 0)) for r in risk_rows]
+        low_vals = [_safe_int(_as_dict(r).get("low", 0)) for r in risk_rows]
+        if any(v > 0 for v in high_vals + med_vals + low_vals):
+            document.add_heading("Alerts per Monitor — High / Medium / Low", level=2)
+            try:
+                _insert_native_chart(
+                    document,
+                    _stacked_xml(
+                        categories=risk_cats,
+                        series_names=["High", "Medium", "Low"],
+                        series_values_list=[high_vals, med_vals, low_vals],
+                        title="Alerts per Monitor — Stacked",
+                        percent_stacked=False,
+                        horizontal=True,
+                        series_colors=["DC3545", "FD7E14", "28A745"],
+                    ),
+                    width_inches=6.0,
+                    height_inches=max(2.5, len(risk_cats) * 0.4 + 0.8),
+                )
+                _insert_native_chart(
+                    document,
+                    _stacked_xml(
+                        categories=risk_cats,
+                        series_names=["High", "Medium", "Low"],
+                        series_values_list=[high_vals, med_vals, low_vals],
+                        title="Alerts per Monitor — 100% Stacked",
+                        percent_stacked=True,
+                        horizontal=True,
+                        series_colors=["DC3545", "FD7E14", "28A745"],
+                    ),
+                    width_inches=6.0,
+                    height_inches=max(2.5, len(risk_cats) * 0.4 + 0.8),
+                )
+            except Exception:
+                pass
+
+    # ── Alerts by Type ───────────────────────────────────────────────────────
     _add_chart_section(
         document,
         title="Alerts by Type",
@@ -128,7 +255,28 @@ def generate_dtm_dashboard_docx(
         chart_type="bar",
         width=6.0,
     )
+    _add_chart_section(
+        document,
+        title="Alerts by Type — Pie",
+        rows=charts.get("alerts_by_type", []),
+        label_key="type",
+        value_key="count",
+        chart_type="pie",
+        width=5.0,
+        height=3.0,
+    )
+    _add_chart_section(
+        document,
+        title="Alerts by Type — Donut",
+        rows=charts.get("alerts_by_type", []),
+        label_key="type",
+        value_key="count",
+        chart_type="donut",
+        width=5.0,
+        height=3.0,
+    )
 
+    # ── Alerts by Status ─────────────────────────────────────────────────────
     _add_chart_section(
         document,
         title="Alerts by Status",
@@ -138,27 +286,95 @@ def generate_dtm_dashboard_docx(
         chart_type="bar",
         width=6.0,
     )
-
     _add_chart_section(
         document,
-        title="Alerts Timeline (daily)",
+        title="Alerts by Status — Pie",
+        rows=charts.get("alerts_by_status", []),
+        label_key="status",
+        value_key="count",
+        chart_type="pie",
+        width=5.0,
+        height=3.0,
+    )
+    _add_chart_section(
+        document,
+        title="Alerts by Status — Donut",
+        rows=charts.get("alerts_by_status", []),
+        label_key="status",
+        value_key="count",
+        chart_type="donut",
+        width=5.0,
+        height=3.0,
+    )
+
+    # ── Timeline: vertical bar + line + area ─────────────────────────────────
+    _add_chart_section(
+        document,
+        title="Alerts Timeline (daily) — Columns",
         rows=charts.get("alerts_timeline", []),
         label_key="date",
         value_key="count",
-        chart_type="timeline",  # vertical bars
+        chart_type="timeline",
+        width=6.0,
+        height=3.0,
+    )
+    _add_chart_section(
+        document,
+        title="Alerts Timeline (daily) — Line",
+        rows=charts.get("alerts_timeline", []),
+        label_key="date",
+        value_key="count",
+        chart_type="line",
+        width=6.0,
+        height=3.0,
+    )
+    _add_chart_section(
+        document,
+        title="Alerts Timeline (daily) — Area",
+        rows=charts.get("alerts_timeline", []),
+        label_key="date",
+        value_key="count",
+        chart_type="area",
         width=6.0,
         height=3.0,
     )
 
+    # ── Noisy monitors ───────────────────────────────────────────────────────
     _add_chart_section(
         document,
-        title="Noisy Monitors",
+        title="Noisy Monitors — Noise Score",
         rows=charts.get("noisy_monitors", []),
         label_key="monitor_name",
         value_key="noise_score",
         chart_type="bar",
         width=6.0,
     )
+
+    # ── Risk Score vs Noise Score per monitor (new clustered bar) ────────────
+    noisy_rows = _as_list(charts.get("noisy_monitors", []))
+    if noisy_rows:
+        noisy_cats = [str(_as_dict(r).get("monitor_name") or "Unknown") for r in noisy_rows]
+        noisy_risk = [_safe_int(_as_dict(r).get("risk_score", 0)) for r in noisy_rows]
+        noisy_noise = [_safe_int(_as_dict(r).get("noise_score", 0)) for r in noisy_rows]
+        if any(v > 0 for v in noisy_risk + noisy_noise):
+            document.add_heading("Risk Score vs Noise Score per Monitor", level=2)
+            try:
+                _insert_native_chart(
+                    document,
+                    _stacked_xml(
+                        categories=noisy_cats,
+                        series_names=["Risk Score", "Noise Score"],
+                        series_values_list=[noisy_risk, noisy_noise],
+                        title="Risk Score vs Noise Score",
+                        percent_stacked=False,
+                        horizontal=True,
+                        series_colors=["0D7F7A", "6C757D"],
+                    ),
+                    width_inches=6.0,
+                    height_inches=max(2.5, len(noisy_cats) * 0.4 + 0.8),
+                )
+            except Exception:
+                pass
 
     # ── Monitor table ────────────────────────────────────────────────────────
     document.add_page_break()
@@ -203,8 +419,17 @@ def _add_chart_section(
         if chart_type == "pie":
             xml = _pie_xml(labels, values, title)
             _insert_native_chart(document, xml, width_inches=width, height_inches=height or 3.0)
+        elif chart_type == "donut":
+            xml = _donut_xml(labels, values, title)
+            _insert_native_chart(document, xml, width_inches=width, height_inches=height or 3.0)
         elif chart_type == "timeline":
             xml = _bar_xml(labels, values, title, horizontal=False)
+            _insert_native_chart(document, xml, width_inches=width, height_inches=height or 3.0)
+        elif chart_type == "line":
+            xml = _line_xml(labels, values, title)
+            _insert_native_chart(document, xml, width_inches=width, height_inches=height or 3.0)
+        elif chart_type == "area":
+            xml = _area_xml(labels, values, title)
             _insert_native_chart(document, xml, width_inches=width, height_inches=height or 3.0)
         else:
             xml = _bar_xml(labels, values, title, horizontal=True)

@@ -61,6 +61,17 @@ _CHART_PALETTE = [
     "0D7F7A", "1A9E98", "0A5F5B", "15B0A8",
     "086560", "20C4BB", "053E3B", "25D4CA",
 ]
+# Semantic severity colors for multi-series charts
+_SEVERITY_PALETTE = {
+    "high": "DC3545",
+    "medium": "FD7E14",
+    "low": "28A745",
+    "risk": "0D7F7A",
+    "noise": "6C757D",
+    "success": "28A745",
+    "skip": "FFC107",
+    "error": "DC3545",
+}
 _NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _NS_WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 _NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -213,6 +224,337 @@ def _build_pie_chart_xml(labels: list[str], values: list[int], title: str) -> st
       </c:pieChart>
     </c:plotArea>
     <c:legend><c:legendPos val="r"/><c:overlay val="0"/></c:legend>
+    <c:plotVisOnly val="1"/>
+  </c:chart>
+</c:chartSpace>"""
+
+
+def _build_donut_chart_xml(
+    labels: list[str],
+    values: list[int],
+    title: str,
+    hole_size: int = 50,
+) -> str:
+    """Generate DrawingML XML for a doughnut chart (modern variant of pie)."""
+    n = len(labels)
+    pts_cat = "".join(
+        f'<c:pt idx="{i}"><c:v>{_xe(str(l))}</c:v></c:pt>'
+        for i, l in enumerate(labels)
+    )
+    pts_val = "".join(
+        f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>'
+        for i, v in enumerate(values)
+    )
+    color_pts = "".join(
+        f'<c:dPt><c:idx val="{i}"/><c:spPr>'
+        f'<a:solidFill><a:srgbClr val="{_CHART_PALETTE[i % len(_CHART_PALETTE)]}"/></a:solidFill>'
+        f"</c:spPr></c:dPt>"
+        for i in range(n)
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="{_NS_C}" xmlns:a="{_NS_A}" xmlns:r="{_NS_R}">
+  <c:chart>
+    <c:title>
+      <c:tx><c:rich><a:bodyPr/><a:lstStyle/>
+        <a:p><a:pPr><a:defRPr b="1" sz="1100"/></a:pPr>
+          <a:r><a:rPr lang="en-US" b="1"/><a:t>{_xe(title)}</a:t></a:r>
+        </a:p>
+      </c:rich></c:tx>
+      <c:overlay val="0"/>
+    </c:title>
+    <c:autoTitleDeleted val="0"/>
+    <c:plotArea>
+      <c:doughnutChart>
+        <c:varyColors val="1"/>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          {color_pts}
+          <c:dLbls>
+            <c:numFmt formatCode="0%" sourceLinked="0"/>
+            <c:showLegendKey val="0"/><c:showVal val="0"/>
+            <c:showCatName val="1"/><c:showSerName val="0"/>
+            <c:showPercent val="1"/><c:showBubbleSize val="0"/>
+            <c:separator>: </c:separator>
+          </c:dLbls>
+          <c:cat><c:strRef><c:strCache>
+            <c:ptCount val="{n}"/>{pts_cat}
+          </c:strCache></c:strRef></c:cat>
+          <c:val><c:numRef><c:numCache>
+            <c:formatCode>General</c:formatCode>
+            <c:ptCount val="{n}"/>{pts_val}
+          </c:numCache></c:numRef></c:val>
+        </c:ser>
+        <c:firstSliceAng val="0"/>
+        <c:holeSize val="{hole_size}"/>
+      </c:doughnutChart>
+    </c:plotArea>
+    <c:legend><c:legendPos val="r"/><c:overlay val="0"/></c:legend>
+    <c:plotVisOnly val="1"/>
+  </c:chart>
+</c:chartSpace>"""
+
+
+def _build_line_chart_xml(
+    labels: list[str],
+    values: list[int],
+    title: str,
+) -> str:
+    """Generate DrawingML XML for a line chart with markers — ideal for timelines."""
+    n = len(labels)
+    pts_cat = "".join(
+        f'<c:pt idx="{i}"><c:v>{_xe(str(l))}</c:v></c:pt>'
+        for i, l in enumerate(labels)
+    )
+    pts_val = "".join(
+        f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>'
+        for i, v in enumerate(values)
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="{_NS_C}" xmlns:a="{_NS_A}" xmlns:r="{_NS_R}">
+  <c:chart>
+    <c:title>
+      <c:tx><c:rich><a:bodyPr/><a:lstStyle/>
+        <a:p><a:pPr><a:defRPr b="1" sz="1100"/></a:pPr>
+          <a:r><a:rPr lang="en-US" b="1"/><a:t>{_xe(title)}</a:t></a:r>
+        </a:p>
+      </c:rich></c:tx>
+      <c:overlay val="0"/>
+    </c:title>
+    <c:autoTitleDeleted val="0"/>
+    <c:plotArea>
+      <c:lineChart>
+        <c:barDir val="col"/>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          <c:spPr>
+            <a:ln w="25400">
+              <a:solidFill><a:srgbClr val="0D7F7A"/></a:solidFill>
+            </a:ln>
+          </c:spPr>
+          <c:marker>
+            <c:symbol val="circle"/>
+            <c:size val="5"/>
+            <c:spPr>
+              <a:solidFill><a:srgbClr val="0D7F7A"/></a:solidFill>
+              <a:ln><a:solidFill><a:srgbClr val="0A5F5B"/></a:solidFill></a:ln>
+            </c:spPr>
+          </c:marker>
+          <c:dLbls>
+            <c:numFmt formatCode="General" sourceLinked="0"/>
+            <c:showLegendKey val="0"/><c:showVal val="1"/>
+            <c:showCatName val="0"/><c:showSerName val="0"/>
+            <c:showPercent val="0"/><c:showBubbleSize val="0"/>
+          </c:dLbls>
+          <c:cat><c:strRef><c:strCache>
+            <c:ptCount val="{n}"/>{pts_cat}
+          </c:strCache></c:strRef></c:cat>
+          <c:val><c:numRef><c:numCache>
+            <c:formatCode>General</c:formatCode>
+            <c:ptCount val="{n}"/>{pts_val}
+          </c:numCache></c:numRef></c:val>
+          <c:smooth val="0"/>
+        </c:ser>
+        <c:axId val="200"/><c:axId val="201"/>
+      </c:lineChart>
+      <c:catAx>
+        <c:axId val="200"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/><c:axPos val="b"/>
+        <c:tickLblPos val="nextTo"/><c:crossAx val="201"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="201"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/><c:axPos val="l"/>
+        <c:numFmt formatCode="General" sourceLinked="0"/>
+        <c:tickLblPos val="nextTo"/><c:crossAx val="200"/>
+        <c:crossBetween val="between"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:plotVisOnly val="1"/>
+  </c:chart>
+</c:chartSpace>"""
+
+
+def _build_area_chart_xml(
+    labels: list[str],
+    values: list[int],
+    title: str,
+) -> str:
+    """Generate DrawingML XML for an area chart — ideal for cumulative volume over time."""
+    n = len(labels)
+    pts_cat = "".join(
+        f'<c:pt idx="{i}"><c:v>{_xe(str(l))}</c:v></c:pt>'
+        for i, l in enumerate(labels)
+    )
+    pts_val = "".join(
+        f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>'
+        for i, v in enumerate(values)
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="{_NS_C}" xmlns:a="{_NS_A}" xmlns:r="{_NS_R}">
+  <c:chart>
+    <c:title>
+      <c:tx><c:rich><a:bodyPr/><a:lstStyle/>
+        <a:p><a:pPr><a:defRPr b="1" sz="1100"/></a:pPr>
+          <a:r><a:rPr lang="en-US" b="1"/><a:t>{_xe(title)}</a:t></a:r>
+        </a:p>
+      </c:rich></c:tx>
+      <c:overlay val="0"/>
+    </c:title>
+    <c:autoTitleDeleted val="0"/>
+    <c:plotArea>
+      <c:areaChart>
+        <c:grouping val="standard"/>
+        <c:varyColors val="0"/>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          <c:spPr>
+            <a:solidFill>
+              <a:srgbClr val="0D7F7A">
+                <a:alpha val="60000"/>
+              </a:srgbClr>
+            </a:solidFill>
+            <a:ln w="19050">
+              <a:solidFill><a:srgbClr val="0A5F5B"/></a:solidFill>
+            </a:ln>
+          </c:spPr>
+          <c:cat><c:strRef><c:strCache>
+            <c:ptCount val="{n}"/>{pts_cat}
+          </c:strCache></c:strRef></c:cat>
+          <c:val><c:numRef><c:numCache>
+            <c:formatCode>General</c:formatCode>
+            <c:ptCount val="{n}"/>{pts_val}
+          </c:numCache></c:numRef></c:val>
+        </c:ser>
+        <c:axId val="300"/><c:axId val="301"/>
+      </c:areaChart>
+      <c:catAx>
+        <c:axId val="300"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/><c:axPos val="b"/>
+        <c:tickLblPos val="nextTo"/><c:crossAx val="301"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="301"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/><c:axPos val="l"/>
+        <c:numFmt formatCode="General" sourceLinked="0"/>
+        <c:tickLblPos val="nextTo"/><c:crossAx val="300"/>
+        <c:crossBetween val="between"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:plotVisOnly val="1"/>
+  </c:chart>
+</c:chartSpace>"""
+
+
+def _build_stacked_bar_chart_xml(
+    categories: list[str],
+    series_names: list[str],
+    series_values_list: list[list[int]],
+    title: str,
+    percent_stacked: bool = False,
+    horizontal: bool = True,
+    series_colors: list[str] | None = None,
+) -> str:
+    """Generate DrawingML XML for a stacked (or 100% stacked) multi-series bar chart.
+
+    Args:
+        categories: Category labels (X axis for vertical bars, Y axis for horizontal).
+        series_names: One name per data series.
+        series_values_list: Parallel list of value arrays — one list per series.
+        title: Chart title.
+        percent_stacked: Use 100% stacked grouping instead of absolute stacked.
+        horizontal: True = horizontal bars; False = vertical (column) bars.
+        series_colors: Optional explicit hex colors per series; defaults to _CHART_PALETTE.
+    """
+    n_cats = len(categories)
+    grouping = "percentStacked" if percent_stacked else "stacked"
+    bar_dir = "bar" if horizontal else "col"
+    cat_pos = "l" if horizontal else "b"
+    val_pos = "b" if horizontal else "l"
+    orientation = "maxMin" if horizontal else "minMax"
+
+    pts_cat = "".join(
+        f'<c:pt idx="{i}"><c:v>{_xe(str(c))}</c:v></c:pt>'
+        for i, c in enumerate(categories)
+    )
+
+    series_xml_parts = []
+    for s_idx, (s_name, s_values) in enumerate(zip(series_names, series_values_list)):
+        color = (series_colors[s_idx] if series_colors and s_idx < len(series_colors)
+                 else _CHART_PALETTE[s_idx % len(_CHART_PALETTE)])
+        pts_val = "".join(
+            f'<c:pt idx="{i}"><c:v>{v}</c:v></c:pt>'
+            for i, v in enumerate(s_values)
+        )
+        fmt_code = "0%" if percent_stacked else "General"
+        series_xml_parts.append(f"""
+        <c:ser>
+          <c:idx val="{s_idx}"/><c:order val="{s_idx}"/>
+          <c:tx><c:strRef><c:strCache>
+            <c:ptCount val="1"/>
+            <c:pt idx="0"><c:v>{_xe(s_name)}</c:v></c:pt>
+          </c:strCache></c:strRef></c:tx>
+          <c:spPr>
+            <a:solidFill><a:srgbClr val="{color}"/></a:solidFill>
+            <a:ln><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></a:ln>
+          </c:spPr>
+          <c:dLbls>
+            <c:numFmt formatCode="{fmt_code}" sourceLinked="0"/>
+            <c:showLegendKey val="0"/><c:showVal val="1"/>
+            <c:showCatName val="0"/><c:showSerName val="0"/>
+            <c:showPercent val="0"/><c:showBubbleSize val="0"/>
+          </c:dLbls>
+          <c:cat><c:strRef><c:strCache>
+            <c:ptCount val="{n_cats}"/>{pts_cat}
+          </c:strCache></c:strRef></c:cat>
+          <c:val><c:numRef><c:numCache>
+            <c:formatCode>General</c:formatCode>
+            <c:ptCount val="{n_cats}"/>{pts_val}
+          </c:numCache></c:numRef></c:val>
+        </c:ser>""")
+
+    all_series = "".join(series_xml_parts)
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="{_NS_C}" xmlns:a="{_NS_A}" xmlns:r="{_NS_R}">
+  <c:chart>
+    <c:title>
+      <c:tx><c:rich><a:bodyPr/><a:lstStyle/>
+        <a:p><a:pPr><a:defRPr b="1" sz="1100"/></a:pPr>
+          <a:r><a:rPr lang="en-US" b="1"/><a:t>{_xe(title)}</a:t></a:r>
+        </a:p>
+      </c:rich></c:tx>
+      <c:overlay val="0"/>
+    </c:title>
+    <c:autoTitleDeleted val="0"/>
+    <c:plotArea>
+      <c:barChart>
+        <c:barDir val="{bar_dir}"/>
+        <c:grouping val="{grouping}"/>
+        <c:varyColors val="0"/>
+        {all_series}
+        <c:axId val="400"/><c:axId val="401"/>
+      </c:barChart>
+      <c:catAx>
+        <c:axId val="400"/>
+        <c:scaling><c:orientation val="{orientation}"/></c:scaling>
+        <c:delete val="0"/><c:axPos val="{cat_pos}"/>
+        <c:tickLblPos val="nextTo"/><c:crossAx val="401"/>
+      </c:catAx>
+      <c:valAx>
+        <c:axId val="401"/>
+        <c:scaling><c:orientation val="minMax"/></c:scaling>
+        <c:delete val="0"/><c:axPos val="{val_pos}"/>
+        <c:numFmt formatCode="General" sourceLinked="0"/>
+        <c:tickLblPos val="nextTo"/><c:crossAx val="400"/>
+        <c:crossBetween val="between"/>
+      </c:valAx>
+    </c:plotArea>
+    <c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend>
     <c:plotVisOnly val="1"/>
   </c:chart>
 </c:chartSpace>"""
@@ -924,15 +1266,47 @@ def _append_ranking_tables(document: Document, context: dict[str, Any]) -> None:
         values = [_safe_int(r["collection_count"]) for r in chart_rows]
         try:
             if ranking_key == "collection_type_distribution":
+                # Pie chart
                 xml = _build_pie_chart_xml(labels, values, ranking_label)
                 _insert_native_chart(document, xml, width_inches=5.0, height_inches=3.2)
+                # Donut chart — modern alternative
+                xml = _build_donut_chart_xml(labels, values, ranking_label + " — Donut")
+                _insert_native_chart(document, xml, width_inches=5.0, height_inches=3.2)
+                # Horizontal bar for comparison
+                xml = _build_bar_chart_xml(labels, values, ranking_label + " — Bars", horizontal=True)
+                _insert_native_chart(document, xml, width_inches=6.0, height_inches=max(2.0, len(labels) * 0.32 + 0.8))
             elif ranking_key == "timeline":
-                xml = _build_bar_chart_xml(labels, values, ranking_label, horizontal=False)
+                # Column (vertical bar) chart
+                xml = _build_bar_chart_xml(labels, values, ranking_label + " — Columns", horizontal=False)
                 _insert_native_chart(document, xml, width_inches=6.0, height_inches=3.2)
-            else:
+                # Line chart — trend view
+                xml = _build_line_chart_xml(labels, values, ranking_label + " — Line")
+                _insert_native_chart(document, xml, width_inches=6.0, height_inches=3.2)
+                # Area chart — cumulative volume view
+                xml = _build_area_chart_xml(labels, values, ranking_label + " — Area")
+                _insert_native_chart(document, xml, width_inches=6.0, height_inches=3.2)
+            elif ranking_key in ("top_tactics", "top_techniques", "top_subtechniques"):
                 height = max(2.0, min(4.0, len(labels) * 0.32 + 0.8))
+                # Horizontal bar
                 xml = _build_bar_chart_xml(labels, values, ranking_label, horizontal=True)
                 _insert_native_chart(document, xml, width_inches=6.0, height_inches=height)
+                # Vertical column chart
+                xml = _build_bar_chart_xml(labels, values, ranking_label + " — Columns", horizontal=False)
+                _insert_native_chart(document, xml, width_inches=6.0, height_inches=3.2)
+                # Pie chart — relative share
+                xml = _build_pie_chart_xml(labels, values, ranking_label + " — Pie")
+                _insert_native_chart(document, xml, width_inches=5.0, height_inches=3.2)
+                # Donut chart — modern alternative
+                xml = _build_donut_chart_xml(labels, values, ranking_label + " — Donut")
+                _insert_native_chart(document, xml, width_inches=5.0, height_inches=3.2)
+            else:
+                height = max(2.0, min(4.0, len(labels) * 0.32 + 0.8))
+                # Horizontal bar (primary)
+                xml = _build_bar_chart_xml(labels, values, ranking_label, horizontal=True)
+                _insert_native_chart(document, xml, width_inches=6.0, height_inches=height)
+                # Vertical column chart
+                xml = _build_bar_chart_xml(labels, values, ranking_label + " — Columns", horizontal=False)
+                _insert_native_chart(document, xml, width_inches=6.0, height_inches=3.2)
         except Exception:
             pass
 
@@ -1015,18 +1389,12 @@ def _shade_cell(cell: Any, fill: str) -> None:
 
 
 def _append_field_coverage(document: Document, context: dict[str, Any]) -> None:
-    """Append field coverage diagnostics."""
+    """Append field coverage diagnostics with a stacked bar chart."""
 
     document.add_heading("Appendix: Field Coverage", level=1)
     coverage = context.get("fields_coverage", {})
     total = _safe_int(context.get("collections_analyzed"))
-    table = document.add_table(rows=1, cols=3)
-    table.style = "Table Grid"
-    header_cells = table.rows[0].cells
-    header_cells[0].text = "Field"
-    header_cells[1].text = "Collections with data"
-    header_cells[2].text = "Collections analyzed"
-    for field_name in (
+    coverage_fields = (
         "targeted_industries",
         "targeted_regions",
         "source_regions",
@@ -1034,11 +1402,49 @@ def _append_field_coverage(document: Document, context: dict[str, Any]) -> None:
         "collection_type",
         "timeline",
         "targeted_organizations",
-    ):
+    )
+    table = document.add_table(rows=1, cols=3)
+    table.style = "Table Grid"
+    header_cells = table.rows[0].cells
+    header_cells[0].text = "Field"
+    header_cells[1].text = "Collections with data"
+    header_cells[2].text = "Collections analyzed"
+    for field_name in coverage_fields:
         cells = table.add_row().cells
         cells[0].text = field_name
         cells[1].text = str(_safe_int(coverage.get(field_name)))
         cells[2].text = str(total)
+
+    # 100% stacked bar chart — visual coverage overview
+    if total > 0:
+        try:
+            cats = [f.replace("_", " ").title() for f in coverage_fields]
+            with_data = [_safe_int(coverage.get(f)) for f in coverage_fields]
+            without_data = [max(0, total - v) for v in with_data]
+            xml = _build_stacked_bar_chart_xml(
+                categories=cats,
+                series_names=["With data", "Without data"],
+                series_values_list=[with_data, without_data],
+                title="Field Coverage — 100% Stacked",
+                percent_stacked=True,
+                horizontal=True,
+                series_colors=["0D7F7A", "D9D9D9"],
+            )
+            height = max(2.5, min(4.5, len(cats) * 0.38 + 0.8))
+            _insert_native_chart(document, xml, width_inches=6.0, height_inches=height)
+            # Absolute stacked bar chart — absolute counts
+            xml_abs = _build_stacked_bar_chart_xml(
+                categories=cats,
+                series_names=["With data", "Without data"],
+                series_values_list=[with_data, without_data],
+                title="Field Coverage — Absolute Counts",
+                percent_stacked=False,
+                horizontal=True,
+                series_colors=["0D7F7A", "D9D9D9"],
+            )
+            _insert_native_chart(document, xml_abs, width_inches=6.0, height_inches=height)
+        except Exception:
+            pass
 
 
 def _append_ttp_diagnostics(document: Document, context: dict[str, Any]) -> None:
