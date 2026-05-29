@@ -169,6 +169,7 @@ class IocStreamReportTests(unittest.TestCase):
 
         result = gti_client.fetch_ioc_stream(
             api_key="test-key",
+            collection_mode="recent_pages",
             entity_type="domain",
             origin="hunting",
             descriptors_only=True,
@@ -180,12 +181,63 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(params["limit"], 40)
         self.assertEqual(params["filter"], "entity_type:domain origin:hunting")
         self.assertEqual(params["descriptors_only"], "true")
-        self.assertEqual(params["order"], "date")
+        self.assertEqual(params["order"], "date-")
         self.assertEqual(result["request_params"]["pages_to_fetch"], 2)
         self.assertEqual(result["request_params"]["max_pages"], 2)
         self.assertEqual(result["request_params"]["api_page_limit"], 40)
         self.assertEqual(result["collection"]["page_size"], 40)
         self.assertNotIn("date", params.get("filter", ""))
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_recent_pages_defaults_to_descending_date_order(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.return_value = {
+            "http_status": 200,
+            "response_headers": {},
+            "raw_json": {"data": []},
+        }
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="recent_pages",
+            max_pages=1,
+        )
+
+        params = mock_probe.call_args.kwargs["params"]
+        self.assertEqual(params["order"], "date-")
+        self.assertEqual(result["request_params"]["gti_order_sent"], "date-")
+        self.assertEqual(result["collection"]["gti_order_sent"], "date-")
+        self.assertFalse(result["collection"]["gti_order_fallback_used"])
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_defaults_to_gti_matched_on_date_filter(
+        self,
+        mock_probe,
+    ) -> None:
+        class FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 5, 28, 12, 0, 0, tzinfo=timezone.utc)
+
+        mock_probe.return_value = {
+            "http_status": 200,
+            "response_headers": {},
+            "raw_json": {"data": []},
+        }
+
+        with patch("backend.gti_client.datetime", FixedDateTime):
+            result = gti_client.fetch_ioc_stream(api_key="test-key", max_pages=1)
+
+        params = mock_probe.call_args.kwargs["params"]
+        self.assertEqual(result["request_params"]["collection_mode"], "time_window")
+        self.assertEqual(params["filter"], "date:2026-05-27+ date:2026-05-29-")
+        self.assertEqual(result["collection"]["collection_mode_label"], "GTI matched-on date filter")
+        self.assertEqual(
+            result["collection"]["gti_filter_sent"],
+            "date:2026-05-27+ date:2026-05-29-",
+        )
 
     @patch("backend.gti_client._probe_json_endpoint")
     def test_fetch_ioc_stream_time_window_sends_server_side_date_filter(
@@ -219,7 +271,7 @@ class IocStreamReportTests(unittest.TestCase):
 
         params = mock_probe.call_args.kwargs["params"]
         self.assertEqual(params["limit"], 40)
-        self.assertEqual(params["order"], "date")
+        self.assertEqual(params["order"], "date-")
         self.assertEqual(
             params["filter"],
             "date:2026-05-19+ date:2026-05-25- entity_type:url origin:hunting",
@@ -243,6 +295,99 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(
             result["collection"]["coverage_status"],
             "gti_date_filtered_sample",
+        )
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_uses_advanced_gti_filter_override_exactly(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.return_value = {
+            "http_status": 200,
+            "response_headers": {},
+            "raw_json": {"data": []},
+        }
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="time_window",
+            advanced_gti_filter_override="date:2026-05-14+ date:2026-05-17-",
+            entity_type="domain",
+            origin="hunting",
+            max_pages=1,
+        )
+
+        params = mock_probe.call_args.kwargs["params"]
+        self.assertEqual(params["filter"], "date:2026-05-14+ date:2026-05-17-")
+        self.assertEqual(
+            result["request_params"]["advanced_gti_filter_override"],
+            "date:2026-05-14+ date:2026-05-17-",
+        )
+        self.assertEqual(
+            result["collection"]["gti_filter_sent"],
+            "date:2026-05-14+ date:2026-05-17-",
+        )
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_time_window_defaults_to_descending_date_order(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.return_value = {
+            "http_status": 200,
+            "response_headers": {},
+            "raw_json": {"data": []},
+        }
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="time_window",
+            time_window="custom",
+            start_date="2026-05-19",
+            end_date="2026-05-25",
+            max_pages=1,
+        )
+
+        params = mock_probe.call_args.kwargs["params"]
+        self.assertEqual(params["order"], "date-")
+        self.assertEqual(result["request_params"]["gti_order_sent"], "date-")
+        self.assertEqual(result["collection"]["gti_order_sent"], "date-")
+        self.assertFalse(result["collection"]["gti_order_fallback_used"])
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_falls_back_when_descending_order_is_rejected(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.side_effect = [
+            {
+                "http_status": 400,
+                "response_headers": {},
+                "raw_json": {"error": {"message": "invalid order"}},
+            },
+            {
+                "http_status": 200,
+                "response_headers": {},
+                "raw_json": {"data": []},
+            },
+        ]
+
+        result = gti_client.fetch_ioc_stream(
+            api_key="test-key",
+            collection_mode="recent_pages",
+            max_pages=1,
+        )
+
+        self.assertEqual(mock_probe.call_count, 2)
+        self.assertEqual(mock_probe.call_args_list[0].kwargs["params"]["order"], "date-")
+        self.assertEqual(mock_probe.call_args_list[1].kwargs["params"]["order"], "date")
+        self.assertEqual(result["status_code"], 200)
+        self.assertEqual(result["request_params"]["gti_order_sent"], "date-")
+        self.assertEqual(result["request_params"]["gti_order_effective"], "date")
+        self.assertTrue(result["collection"]["gti_order_fallback_used"])
+        self.assertIn(
+            "GTI rejected order=date-, fallback order=date was used.",
+            result["warnings"],
         )
 
     @patch("backend.gti_client._probe_json_endpoint")
@@ -333,9 +478,9 @@ class IocStreamReportTests(unittest.TestCase):
                     {
                         "id": f"example-{index}.com",
                         "type": "domain",
-                        "attributes": {"matched_date": matched_date},
+                        "attributes": {"matched_on": matched_on},
                     }
-                    for index, matched_date in enumerate(dates, start=start)
+                    for index, matched_on in enumerate(dates, start=start)
                 ]
             }
             if next_cursor:
@@ -393,6 +538,7 @@ class IocStreamReportTests(unittest.TestCase):
             start_date="2026-05-14",
             end_date="2026-05-21",
             max_pages=5,
+            order="date",
         )
 
         self.assertEqual(mock_probe.call_count, 1)
@@ -436,13 +582,13 @@ class IocStreamReportTests(unittest.TestCase):
         self,
         mock_probe,
     ) -> None:
-        def page(identifier: str, matched_date: str, cursor: str | None = None) -> dict:
+        def page(identifier: str, matched_on: str, cursor: str | None = None) -> dict:
             payload = {
                 "data": [
                     {
                         "id": identifier,
                         "type": "domain",
-                        "attributes": {"matched_date": matched_date},
+                        "attributes": {"matched_on": matched_on},
                     }
                 ]
             }
@@ -552,7 +698,7 @@ class IocStreamReportTests(unittest.TestCase):
                     {
                         "id": "one.example",
                         "type": "domain",
-                        "attributes": {"matched_date": "2026-05-21T10:00:00Z"},
+                        "attributes": {"matched_on": "2026-05-21T10:00:00Z"},
                     }
                 ]
             },
@@ -589,7 +735,7 @@ class IocStreamReportTests(unittest.TestCase):
                             "id": "one.example",
                             "type": "domain",
                             "attributes": {
-                                "matched_date": "2026-05-21T10:00:00Z",
+                                "matched_on": "2026-05-21T10:00:00Z",
                                 "creation_date": "2001-01-01T00:00:00Z",
                             },
                         }
@@ -606,7 +752,7 @@ class IocStreamReportTests(unittest.TestCase):
                             "id": "two.example",
                             "type": "domain",
                             "attributes": {
-                                "matched_date": "2026-05-20T10:00:00Z",
+                                "matched_on": "2026-05-20T10:00:00Z",
                                 "first_seen": "2004-01-01T00:00:00Z",
                             },
                         }
@@ -633,25 +779,20 @@ class IocStreamReportTests(unittest.TestCase):
             result["collection"]["oldest_stream_event_timestamp"],
             "2026-05-20T10:00:00+00:00",
         )
-        self.assertEqual(
-            result["collection"]["oldest_object_metadata_timestamp"],
-            "2001-01-01T00:00:00+00:00",
-        )
+        self.assertIsNone(result["collection"]["oldest_object_metadata_timestamp"])
         self.assertEqual(
             result["collection"]["ignored_object_metadata_old_timestamp_count"],
-            2,
+            0,
         )
         self.assertEqual(result["collection"]["items_with_stream_timestamp"], 2)
         self.assertEqual(result["collection"]["items_without_stream_timestamp"], 0)
-        self.assertEqual(result["collection"]["stream_timestamp_fields_seen"], ["matched_date"])
+        self.assertEqual(result["collection"]["stream_timestamp_fields_seen"], ["matched_on"])
         self.assertEqual(
             result["collection"]["object_metadata_timestamp_fields_seen"],
-            ["creation_date", "first_seen"],
+            [],
         )
         self.assertEqual(result["collection"]["stop_timestamp_field"], None)
-        self.assertIn("matched_date", result["collection"]["timestamp_fields_seen"])
-        self.assertIn("creation_date", result["collection"]["timestamp_fields_seen"])
-        self.assertIn("first_seen", result["collection"]["timestamp_fields_seen"])
+        self.assertEqual(result["collection"]["timestamp_fields_seen"], ["matched_on"])
 
     @patch("backend.gti_client._probe_json_endpoint")
     def test_fetch_ioc_stream_time_window_uses_recursive_matched_on_fields(
@@ -716,7 +857,7 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(result["raw_data"]["data"][0]["id"], "inside.example")
         self.assertEqual(
             result["collection"]["earliest_fetched_timestamp"],
-            "2026-05-13T10:00:00+00:00",
+            "2026-05-20T10:00:00+00:00",
         )
         self.assertEqual(
             result["collection"]["latest_fetched_timestamp"],
@@ -724,11 +865,11 @@ class IocStreamReportTests(unittest.TestCase):
         )
         self.assertEqual(
             result["collection"]["stream_timestamp_fields_seen"],
-            ["matched_at", "matched_on"],
+            ["matched_on"],
         )
         self.assertEqual(
             result["collection"]["object_metadata_timestamp_fields_seen"],
-            ["last_seen_itw_date"],
+            [],
         )
 
         raw_diagnostics = result["collection"]["raw_item_timestamp_diagnostics"]
@@ -742,11 +883,8 @@ class IocStreamReportTests(unittest.TestCase):
                 "accepted_as_stream_timestamp"
             ]
         )
-        self.assertTrue(
-            first_fields["attributes.last_seen_itw_date"][
-                "rejected_as_object_metadata"
-            ]
-        )
+        self.assertNotIn("attributes.last_seen_itw_date", first_fields)
+        self.assertEqual(raw_diagnostics[1]["date_fields"], [])
 
     @patch("backend.gti_client._probe_json_endpoint")
     def test_fetch_ioc_stream_time_window_without_stream_timestamps_keeps_gti_results(
@@ -798,12 +936,9 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(result["collection"]["stream_timestamp_fields_seen"], [])
         self.assertEqual(
             result["collection"]["object_metadata_timestamp_fields_seen"],
-            ["creation_date", "first_submission_date", "last_seen_itw_date"],
+            [],
         )
-        self.assertEqual(
-            result["collection"]["oldest_object_metadata_timestamp"],
-            "2001-01-01T00:00:00+00:00",
-        )
+        self.assertIsNone(result["collection"]["oldest_object_metadata_timestamp"])
         raw_fields = {
             row["field"]
             for row in result["collection"]["raw_item_timestamp_diagnostics"][0][
@@ -816,27 +951,174 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertNotIn("processing_timestamp", raw_fields)
         self.assertEqual(result["warnings"], [])
 
-    def test_stream_event_datetime_keeps_object_created_at_separate(self) -> None:
+    def test_stream_event_datetime_ignores_all_non_matched_on_dates(self) -> None:
         object_item = {
             "id": "object-created.example",
             "type": "domain",
-            "attributes": {"created_at": "2001-01-01T00:00:00Z"},
+            "attributes": {
+                "created_at": "2001-01-01T00:00:00Z",
+                "last_analysis_date": "2025-02-10T00:00:00Z",
+            },
         }
         notification_item = {
             "id": "stream-created.example",
             "type": "ioc_stream_notification",
             "attributes": {"created_at": "2026-05-21T10:00:00Z"},
         }
+        matched_item = {
+            "id": "matched.example",
+            "type": "domain",
+            "attributes": {"matched_on": "2026-05-28T00:00:00Z"},
+        }
 
         self.assertIsNone(gti_client.extract_stream_event_datetime(object_item))
+        self.assertIsNone(gti_client.extract_object_metadata_datetime(object_item))
+        self.assertIsNone(gti_client.extract_stream_event_datetime(notification_item))
         self.assertEqual(
-            gti_client.extract_object_metadata_datetime(object_item).isoformat(),
-            "2001-01-01T00:00:00+00:00",
+            gti_client.extract_matched_on_datetime(matched_item).isoformat(),
+            "2026-05-28T00:00:00+00:00",
+        )
+
+    def test_normalize_ioc_stream_item_uses_context_notification_date(self) -> None:
+        item = {
+            "id": "notification.example",
+            "type": "domain",
+            "context_attributes": {
+                "notification_date": 1777368236,
+                "notification_id": "notification-1",
+                "origin": "hunting",
+                "sources": [{"name": "Brand hunt"}],
+            },
+            "attributes": {"last_analysis_date": "2025-02-10T00:00:00Z"},
+        }
+
+        normalized = gti_client.normalize_ioc_stream_item(item)
+
+        self.assertEqual(normalized["matched_date"], "2026-04-28T09:23:56+00:00")
+        self.assertEqual(normalized["notification_id"], "notification-1")
+        self.assertEqual(normalized["notification_origin"], "hunting")
+        self.assertEqual(normalized["notification_sources"], ["Brand hunt"])
+
+    def test_normalize_ioc_stream_item_ignores_last_analysis_without_notification_date(
+        self,
+    ) -> None:
+        item = {
+            "id": "old-analysis.example",
+            "type": "domain",
+            "attributes": {"last_analysis_date": "2025-02-10T00:00:00Z"},
+        }
+
+        normalized = gti_client.normalize_ioc_stream_item(item)
+
+        self.assertIsNone(normalized["matched_date"])
+
+    def test_normalize_ioc_stream_item_prefers_notification_date_over_creation_date(
+        self,
+    ) -> None:
+        item = {
+            "id": "created-long-ago.example",
+            "type": "domain",
+            "context_attributes": {"notification_date": "2026-05-28T00:00:00Z"},
+            "attributes": {"creation_date": "2001-01-01T00:00:00Z"},
+        }
+
+        normalized = gti_client.normalize_ioc_stream_item(item)
+
+        self.assertEqual(normalized["matched_date"], "2026-05-28T00:00:00+00:00")
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_ignores_last_analysis_date_without_matched_on(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.return_value = {
+            "http_status": 200,
+            "response_headers": {},
+            "raw_json": {
+                "data": [
+                    {
+                        "id": "old-analysis.example",
+                        "type": "domain",
+                        "attributes": {"last_analysis_date": "2025-02-10T00:00:00Z"},
+                    }
+                ]
+            },
+        }
+
+        result = gti_client.fetch_ioc_stream(api_key="test-key", max_pages=1)
+
+        self.assertIsNone(result["collection"]["earliest_fetched_timestamp"])
+        self.assertIsNone(result["collection"]["latest_fetched_timestamp"])
+        self.assertEqual(result["collection"]["items_with_stream_timestamp"], 0)
+        self.assertEqual(result["collection"]["timestamp_fields_seen"], [])
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_uses_matched_on_for_earliest_and_latest(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.return_value = {
+            "http_status": 200,
+            "response_headers": {},
+            "raw_json": {
+                "data": [
+                    {
+                        "id": "matched.example",
+                        "type": "domain",
+                        "attributes": {"matched_on": "2026-05-28T00:00:00Z"},
+                    }
+                ]
+            },
+        }
+
+        result = gti_client.fetch_ioc_stream(api_key="test-key", max_pages=1)
+
+        self.assertEqual(
+            result["collection"]["earliest_fetched_timestamp"],
+            "2026-05-28T00:00:00+00:00",
         )
         self.assertEqual(
-            gti_client.extract_stream_event_datetime(notification_item).isoformat(),
-            "2026-05-21T10:00:00+00:00",
+            result["collection"]["latest_fetched_timestamp"],
+            "2026-05-28T00:00:00+00:00",
         )
+
+    @patch("backend.gti_client._probe_json_endpoint")
+    def test_fetch_ioc_stream_prefers_notification_date_over_old_creation_date(
+        self,
+        mock_probe,
+    ) -> None:
+        mock_probe.return_value = {
+            "http_status": 200,
+            "response_headers": {},
+            "raw_json": {
+                "data": [
+                    {
+                        "id": "notification-date.example",
+                        "type": "domain",
+                        "context_attributes": {
+                            "notification_date": "2026-05-28T00:00:00Z",
+                            "notification_id": "notification-1",
+                        },
+                        "attributes": {"creation_date": "2001-01-01T00:00:00Z"},
+                    }
+                ]
+            },
+        }
+
+        result = gti_client.fetch_ioc_stream(api_key="test-key", max_pages=1)
+
+        self.assertEqual(
+            result["collection"]["earliest_fetched_timestamp"],
+            "2026-05-28T00:00:00+00:00",
+        )
+        self.assertEqual(
+            result["collection"]["latest_fetched_timestamp"],
+            "2026-05-28T00:00:00+00:00",
+        )
+        self.assertEqual(result["collection"]["notification_date_count"], 1)
+        self.assertEqual(result["collection"]["notification_id_count"], 1)
+        self.assertEqual(result["collection"]["matched_on_fallback_count"], 0)
+        self.assertEqual(result["collection"]["missing_notification_date_count"], 0)
 
     @patch("backend.gti_client._probe_json_endpoint")
     def test_fetch_ioc_stream_follows_unquoted_link_header(self, mock_probe) -> None:
@@ -851,7 +1133,7 @@ class IocStreamReportTests(unittest.TestCase):
                         {
                             "id": "first.example",
                             "type": "domain",
-                            "attributes": {"matched_date": "2026-05-21T10:00:00Z"},
+                            "attributes": {"matched_on": "2026-05-21T10:00:00Z"},
                         }
                     ]
                 },
@@ -864,7 +1146,7 @@ class IocStreamReportTests(unittest.TestCase):
                         {
                             "id": "second.example",
                             "type": "domain",
-                            "attributes": {"matched_date": "2026-05-20T10:00:00Z"},
+                            "attributes": {"matched_on": "2026-05-20T10:00:00Z"},
                         }
                     ]
                 },
@@ -873,6 +1155,7 @@ class IocStreamReportTests(unittest.TestCase):
 
         result = gti_client.fetch_ioc_stream(
             api_key="test-key",
+            collection_mode="recent_pages",
             pages_to_fetch=2,
         )
 
@@ -894,7 +1177,7 @@ class IocStreamReportTests(unittest.TestCase):
                     {
                         "id": "first.example",
                         "type": "domain",
-                        "attributes": {"matched_date": "2026-05-21T10:00:00Z"},
+                        "attributes": {"matched_on": "2026-05-21T10:00:00Z"},
                     }
                 ]
             },
@@ -902,13 +1185,14 @@ class IocStreamReportTests(unittest.TestCase):
 
         result = gti_client.fetch_ioc_stream(
             api_key="test-key",
+            collection_mode="recent_pages",
             pages_to_fetch=10,
         )
 
         self.assertEqual(mock_probe.call_count, 1)
         self.assertEqual(result["collection"]["stopped_reason"], "no_more_pages")
         self.assertIn(
-            "IoC Stream is chronological. This report summarizes the recent pages returned by the API, not a guaranteed complete time window.",
+            "Diagnostic mode only: this endpoint may not reflect the newest Matched on dates without a GTI date filter.",
             result["warnings"],
         )
         page_diagnostics = result["page_diagnostics"]
@@ -930,7 +1214,7 @@ class IocStreamReportTests(unittest.TestCase):
                         {
                             "id": "first.example",
                             "type": "domain",
-                            "attributes": {"matched_date": "2026-05-21T10:00:00Z"},
+                            "attributes": {"matched_on": "2026-05-21T10:00:00Z"},
                         }
                     ],
                     "links": {"next": "/api/v3/ioc_stream?page=2"},
@@ -944,7 +1228,7 @@ class IocStreamReportTests(unittest.TestCase):
                         {
                             "id": "second.example",
                             "type": "domain",
-                            "attributes": {"matched_date": "2026-05-20T10:00:00Z"},
+                            "attributes": {"matched_on": "2026-05-20T10:00:00Z"},
                         }
                     ]
                 },
@@ -953,6 +1237,7 @@ class IocStreamReportTests(unittest.TestCase):
 
         result = gti_client.fetch_ioc_stream(
             api_key="test-key",
+            collection_mode="recent_pages",
             pages_to_fetch=2,
         )
 
@@ -976,7 +1261,7 @@ class IocStreamReportTests(unittest.TestCase):
                         {
                             "id": "first.example",
                             "type": "domain",
-                            "attributes": {"matched_date": "2026-05-21T10:00:00Z"},
+                            "attributes": {"matched_on": "2026-05-21T10:00:00Z"},
                         }
                     ],
                     "links": {
@@ -992,7 +1277,7 @@ class IocStreamReportTests(unittest.TestCase):
                         {
                             "id": "second.example",
                             "type": "domain",
-                            "attributes": {"matched_date": "2026-05-20T10:00:00Z"},
+                            "attributes": {"matched_on": "2026-05-20T10:00:00Z"},
                         }
                     ]
                 },
@@ -1001,6 +1286,7 @@ class IocStreamReportTests(unittest.TestCase):
 
         result = gti_client.fetch_ioc_stream(
             api_key="test-key",
+            collection_mode="recent_pages",
             pages_to_fetch=2,
         )
 
@@ -1019,7 +1305,7 @@ class IocStreamReportTests(unittest.TestCase):
                         {
                             "id": "first.example",
                             "type": "domain",
-                            "attributes": {"matched_date": "2026-05-21T10:00:00Z"},
+                            "attributes": {"matched_on": "2026-05-21T10:00:00Z"},
                         }
                     ],
                     "meta": {
@@ -1038,7 +1324,7 @@ class IocStreamReportTests(unittest.TestCase):
                         {
                             "id": "second.example",
                             "type": "domain",
-                            "attributes": {"matched_date": "2026-05-20T10:00:00Z"},
+                            "attributes": {"matched_on": "2026-05-20T10:00:00Z"},
                         }
                     ]
                 },
@@ -1047,6 +1333,7 @@ class IocStreamReportTests(unittest.TestCase):
 
         result = gti_client.fetch_ioc_stream(
             api_key="test-key",
+            collection_mode="recent_pages",
             pages_to_fetch=2,
         )
 
@@ -1076,13 +1363,14 @@ class IocStreamReportTests(unittest.TestCase):
 
         result = gti_client.fetch_ioc_stream(
             api_key="test-key",
+            collection_mode="recent_pages",
             pages_to_fetch=2,
         )
 
         self.assertEqual(mock_probe.call_count, 2)
         self.assertEqual(result["total_collected"], 2)
         self.assertEqual(result["collection"]["stopped_reason"], "requested_pages_reached")
-        self.assertIn("IoC Stream is chronological", " ".join(result["warnings"]))
+        self.assertIn("Diagnostic mode only", " ".join(result["warnings"]))
 
     @patch("backend.gti_client._probe_json_endpoint")
     def test_enrich_ioc_indicator_encodes_url_and_updates_risk(self, mock_probe) -> None:
@@ -1206,7 +1494,7 @@ class IocStreamReportTests(unittest.TestCase):
                         "id": long_url,
                         "type": "url",
                         "attributes": {
-                            "matched_date": "2026-05-21T10:00:00Z",
+                            "matched_on": "2026-05-21T10:00:00Z",
                             "gti_score": 85,
                         },
                     },
@@ -1214,7 +1502,7 @@ class IocStreamReportTests(unittest.TestCase):
                         "id": long_url,
                         "type": "url",
                         "attributes": {
-                            "matched_date": "2026-05-21T10:00:00Z",
+                            "matched_on": "2026-05-21T10:00:00Z",
                             "gti_score": 85,
                         },
                     },
@@ -1274,7 +1562,7 @@ class IocStreamReportTests(unittest.TestCase):
                     {
                         "id": long_url,
                         "type": "url",
-                        "attributes": {"matched_date": "2026-05-21T10:00:00Z"},
+                        "attributes": {"matched_on": "2026-05-21T10:00:00Z"},
                     }
                 ]
             },

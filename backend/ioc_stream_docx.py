@@ -1,4 +1,4 @@
-"""DOCX export helpers for GTI Recent IoC Stream Sample reports."""
+"""DOCX export helpers for GTI IoC Stream reports."""
 
 from __future__ import annotations
 
@@ -20,11 +20,11 @@ from backend.top_ranking_docx import (  # noqa: PLC0415
 
 
 def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> str:
-    """Render a Recent IoC Stream Sample report as a readable DOCX document."""
+    """Render an IoC Stream report as a readable DOCX document."""
 
     document = Document()
     core = document.core_properties
-    core.title = "GTI Recent IoC Stream Sample Report"
+    core.title = "GTI IoC Stream Report"
     core.subject = "Client-friendly summary of GTI IoC Stream notifications"
 
     styles = document.styles
@@ -32,7 +32,7 @@ def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> s
     styles["Normal"].font.size = Pt(10)
 
     summary = _as_dict(report_data.get("summary"))
-    document.add_heading("GTI Recent IoC Stream Sample Report", level=0)
+    document.add_heading("GTI IoC Stream Report", level=0)
     document.add_paragraph(f"Generated at: {summary.get('generated_at') or 'Unknown'}")
 
     document.add_heading("Executive Summary", level=1)
@@ -43,36 +43,37 @@ def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> s
     technical_details = _as_dict(report_data.get("technical_details"))
     enrichment = _as_dict(technical_details.get("enrichment"))
     collection = _as_dict(report_data.get("collection") or technical_details.get("collection"))
+    is_filtered_mode = collection.get("collection_mode") == "time_window"
     metrics = [
         ("Collection mode", collection.get("collection_mode_label", collection.get("collection_mode", "recent_pages"))),
-        ("Time window", _as_dict(collection.get("time_window")).get("label", "n/a")),
+        ("GTI matched-on date filter", _as_dict(collection.get("time_window")).get("label", "n/a")),
         ("Requested pages", collection.get("requested_pages", "Unknown")),
         ("Max pages", collection.get("max_pages", collection.get("requested_pages", "Unknown"))),
         ("Pages fetched", collection.get("pages_fetched", 0)),
         ("Page size", collection.get("page_size", 40)),
+        ("GTI order sent", collection.get("gti_order_sent") or "n/a"),
+        ("GTI effective order", collection.get("gti_order_effective") or collection.get("gti_order_sent") or "n/a"),
+        ("GTI order fallback used", collection.get("gti_order_fallback_used", False)),
         ("Raw IoCs fetched", collection.get("raw_ioc_count", summary.get("raw_ioc_count", 0))),
-        ("IoCs returned by GTI date filter", collection.get("raw_iocs_returned", collection.get("server_side_date_filter_returned_count", collection.get("raw_ioc_count", summary.get("raw_ioc_count", 0))))),
+        ("IoCs returned by GTI filter", collection.get("raw_iocs_returned", collection.get("server_side_date_filter_returned_count", collection.get("raw_ioc_count", summary.get("raw_ioc_count", 0))))),
         ("Unique IoCs after deduplication", collection.get("unique_ioc_count", summary.get("total_iocs", 0))),
         ("Duplicates removed", collection.get("duplicates_removed", 0)),
         ("Stopped reason", collection.get("stopped_reason", "unknown")),
         ("Coverage status", collection.get("coverage_status", "n/a")),
         ("Server date filter string", collection.get("server_side_date_filter_string") or "n/a"),
         ("Server date filter returned count", collection.get("server_side_date_filter_returned_count", collection.get("server_side_date_filter_item_count", 0))),
-        ("GTI date filter sent", collection.get("server_side_date_filter_string") or "n/a"),
+        ("GTI filter sent", collection.get("gti_filter_sent") or collection.get("server_side_date_filter_string") or "n/a"),
         ("Recommendation", collection.get("recommendation") or "n/a"),
-        ("Earliest fetched timestamp", collection.get("earliest_fetched_timestamp") or "n/a"),
-        ("Latest fetched timestamp", collection.get("latest_fetched_timestamp") or "n/a"),
-        ("Earliest parsed timestamp (diagnostic only)", collection.get("earliest_fetched_timestamp") or "n/a"),
-        ("Latest parsed timestamp (diagnostic only)", collection.get("latest_fetched_timestamp") or "n/a"),
         ("Items with stream timestamp", collection.get("items_with_stream_timestamp", 0)),
         ("Items without stream timestamp", collection.get("items_without_stream_timestamp", collection.get("items_without_stream_timestamp_count", 0))),
-        ("Stream timestamp fields seen", ", ".join(str(field) for field in _as_list(collection.get("stream_timestamp_fields_seen"))) or "n/a"),
-        ("Object metadata timestamp fields seen", ", ".join(str(field) for field in _as_list(collection.get("object_metadata_timestamp_fields_seen"))) or "n/a"),
+        ("Matched on fields seen", ", ".join(str(field) for field in _as_list(collection.get("stream_timestamp_fields_seen"))) or "n/a"),
+        ("Notification date count", collection.get("notification_date_count", 0)),
+        ("Matched_on fallback count", collection.get("matched_on_fallback_count", 0)),
+        ("Missing notification date count", collection.get("missing_notification_date_count", 0)),
+        ("Notification ID count", collection.get("notification_id_count", 0)),
         ("Timestamp fields seen", ", ".join(str(field) for field in _as_list(collection.get("timestamp_fields_seen"))) or "n/a"),
         ("Stop timestamp field", collection.get("stop_timestamp_field") or "n/a"),
-        ("Oldest stream event timestamp", collection.get("oldest_stream_event_timestamp") or "n/a"),
-        ("Oldest object metadata timestamp", collection.get("oldest_object_metadata_timestamp") or "n/a"),
-        ("Ignored old object metadata timestamps", collection.get("ignored_object_metadata_old_timestamp_count", 0)),
+        ("Oldest matched on timestamp", collection.get("oldest_stream_event_timestamp") or "n/a"),
         ("Items without stream timestamp", collection.get("items_without_stream_timestamp_count", 0)),
         ("Total IoCs", summary.get("total_iocs", 0)),
         ("Total enriched", collection.get("total_enriched", enrichment.get("succeeded", 0))),
@@ -91,6 +92,11 @@ def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> s
         ("Enrichment requested", enrichment.get("requested_limit", 0)),
         ("Enrichment actual scope", enrichment.get("actual_limit", 0)),
     ]
+    if is_filtered_mode:
+        metrics[18:18] = [
+            ("Earliest matched on", collection.get("earliest_fetched_timestamp") or "n/a"),
+            ("Latest matched on", collection.get("latest_fetched_timestamp") or "n/a"),
+        ]
     _add_key_value_table(document, metrics)
     document.add_paragraph(
         "Risk scoring requires enrichment. This may generate one API lookup per IoC. "

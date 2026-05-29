@@ -57,6 +57,8 @@ const iocStreamTimeWindowWrapper = document.getElementById("ioc_stream_time_wind
 const iocStreamStartDateField = document.getElementById("ioc_stream_start_date");
 const iocStreamEndDateField = document.getElementById("ioc_stream_end_date");
 const iocStreamCustomDatesWrapper = document.getElementById("ioc_stream_custom_dates_fields");
+const iocStreamAdvancedFilterField = document.getElementById("ioc_stream_advanced_filter");
+const iocStreamAdvancedFilterWrapper = document.getElementById("ioc_stream_advanced_filter_field");
 const iocStreamEntityTypeField = document.getElementById("ioc_stream_entity_type");
 const iocStreamOriginField = document.getElementById("ioc_stream_origin");
 const iocStreamDocxButton = document.getElementById("ioc-stream-docx-button");
@@ -2540,7 +2542,7 @@ function renderDtmDashboard(responseData) {
 
 function buildIocStreamParams() {
     const params = new URLSearchParams();
-    const collectionMode = iocStreamCollectionModeField?.value || "recent_pages";
+    const collectionMode = iocStreamCollectionModeField?.value || "time_window";
     const pagesChoice = iocStreamPagesToFetchField?.value || "5";
     const maxPages = pagesChoice === "custom"
         ? Number(iocStreamCustomPagesField?.value || 10)
@@ -2554,6 +2556,10 @@ function buildIocStreamParams() {
     if (collectionMode === "time_window") {
         const timeWindow = iocStreamTimeWindowField?.value || "last_24h";
         params.set("time_window", timeWindow);
+        const advancedFilter = iocStreamAdvancedFilterField?.value?.trim() || "";
+        if (advancedFilter) {
+            params.set("advanced_gti_filter_override", advancedFilter);
+        }
         const startDate = iocStreamStartDateField?.value || "";
         const endDate = iocStreamEndDateField?.value || "";
         if (timeWindow === "custom") {
@@ -2565,7 +2571,7 @@ function buildIocStreamParams() {
 }
 
 function syncIocStreamCollectionControls() {
-    const collectionMode = iocStreamCollectionModeField?.value || "recent_pages";
+    const collectionMode = iocStreamCollectionModeField?.value || "time_window";
     const pagesChoice = iocStreamPagesToFetchField?.value || "5";
     const isCustomPages = pagesChoice === "custom";
     const isTimeWindow = collectionMode === "time_window";
@@ -2582,6 +2588,12 @@ function syncIocStreamCollectionControls() {
     }
     if (iocStreamTimeWindowField) {
         iocStreamTimeWindowField.disabled = !isTimeWindow;
+    }
+    if (iocStreamAdvancedFilterWrapper) {
+        iocStreamAdvancedFilterWrapper.hidden = !isTimeWindow;
+    }
+    if (iocStreamAdvancedFilterField) {
+        iocStreamAdvancedFilterField.disabled = !isTimeWindow;
     }
     if (iocStreamCustomDatesWrapper) {
         iocStreamCustomDatesWrapper.hidden = !isTimeWindow || !isCustomWindow;
@@ -2729,20 +2741,20 @@ function RecentExposureCollectionSummary(responseData) {
     const pageDiagnostics = Array.isArray(diagnostics.page_diagnostics)
         ? diagnostics.page_diagnostics
         : (Array.isArray(collection.page_diagnostics) ? collection.page_diagnostics : []);
-    const collectionMode = collection.collection_mode || responseData.technical_details?.request_params?.collection_mode || "recent_pages";
-    const modeLabel = collectionMode === "time_window" ? "GTI date-filtered sample" : "Recent chronological sample";
+    const collectionMode = collection.collection_mode || responseData.technical_details?.request_params?.collection_mode || "time_window";
+    const modeLabel = collectionMode === "time_window" ? "GTI matched-on date filter" : "Unfiltered IoC Stream sample (diagnostic)";
     const stoppedReason = String(collection.stopped_reason || "unknown").replaceAll("_", " ");
-    const earliestFetchedTimestamp = collection.earliest_fetched_timestamp || responseData.summary?.earliest_fetched_timestamp || collection.earliest_timestamp || responseData.summary?.earliest_timestamp;
-    const latestFetchedTimestamp = collection.latest_fetched_timestamp || responseData.summary?.latest_fetched_timestamp || collection.latest_timestamp || responseData.summary?.latest_timestamp;
-    const earliestParsedTimestamp = collection.earliest_fetched_timestamp || responseData.summary?.earliest_fetched_timestamp || collection.earliest_timestamp || responseData.summary?.earliest_timestamp;
-    const latestParsedTimestamp = collection.latest_fetched_timestamp || responseData.summary?.latest_fetched_timestamp || collection.latest_timestamp || responseData.summary?.latest_timestamp;
+    const gtiOrderSent = collection.gti_order_sent || responseData.technical_details?.request_params?.gti_order_sent || responseData.technical_details?.request_params?.order || "n/a";
+    const gtiOrderEffective = collection.gti_order_effective || responseData.technical_details?.request_params?.gti_order_effective || gtiOrderSent;
+    const gtiFilterSent = collection.gti_filter_sent || collection.server_side_date_filter_string || responseData.technical_details?.request_params?.gti_filter_sent || "n/a";
+    const earliestMatchedOnTimestamp = collection.earliest_fetched_timestamp || responseData.summary?.earliest_fetched_timestamp || collection.oldest_stream_event_timestamp || diagnostics.oldest_stream_event_timestamp;
+    const latestMatchedOnTimestamp = collection.latest_fetched_timestamp || responseData.summary?.latest_fetched_timestamp;
     const recommendation = collection.recommendation || diagnostics.recommendation || "";
     const returnedByDateFilter = collection.raw_iocs_returned ?? collection.server_side_date_filter_returned_count ?? collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0;
     const insideWindowValue = collectionMode === "time_window" ? returnedByDateFilter : (collection.iocs_inside_window ?? responseData.summary?.iocs_inside_window ?? collection.raw_ioc_count ?? 0);
     const insideWindowHint = collectionMode === "time_window" ? "GTI filter" : "kept";
-    const serverDateDiagnosticsLine = collectionMode === "time_window" && collection.server_side_date_filter_attempted ? `<p class="compact-note">GTI date filter: ${escapeHtml(String(collection.server_side_date_filter_string || "n/a"))}. Raw IoCs returned: ${escapeHtml(String(returnedByDateFilter))}.</p>` : "";
+    const serverDateDiagnosticsLine = collectionMode === "time_window" && collection.server_side_date_filter_attempted ? `<p class="compact-note">GTI filter sent: ${escapeHtml(String(gtiFilterSent))}. Raw IoCs returned: ${escapeHtml(String(returnedByDateFilter))}.</p>` : "";
     const streamTimestampFields = diagnostics.stream_timestamp_fields_seen || collection.stream_timestamp_fields_seen || [];
-    const objectTimestampFields = diagnostics.object_metadata_timestamp_fields_seen || collection.object_metadata_timestamp_fields_seen || [];
     const rawTimestampDiagnostics = diagnostics.raw_item_timestamp_diagnostics || collection.raw_item_timestamp_diagnostics || [];
     const timestampDiagnosticRows = Array.isArray(rawTimestampDiagnostics)
         ? rawTimestampDiagnostics.flatMap((item) => {
@@ -2764,17 +2776,19 @@ function RecentExposureCollectionSummary(responseData) {
         ["Pages Fetched", collection.pages_fetched ?? responseData.summary?.pages_fetched ?? 0, "GTI pages"],
         ["Max Pages", collection.max_pages ?? collection.requested_pages ?? "n/a", "safety cap"],
         ["Page Size", collection.page_size ?? responseData.summary?.page_size ?? "n/a", "API limit"],
+        ["GTI Order Sent", gtiOrderSent, collection.gti_order_fallback_used ? `fallback ${gtiOrderEffective}` : "order"],
         ["Raw IoCs Fetched", collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0, "before filtering"],
-        [collectionMode === "time_window" ? "GTI Date Filter Returned" : "Inside Window", insideWindowValue, insideWindowHint],
+        [collectionMode === "time_window" ? "GTI Filter Returned" : "Fetched IoCs", insideWindowValue, insideWindowHint],
         ["Unique IoCs", collection.unique_ioc_count ?? responseData.summary?.unique_ioc_count ?? 0, "deduped"],
         ["Duplicates Removed", collection.duplicates_removed ?? responseData.summary?.duplicates_removed ?? 0, "duplicates"],
         ["Enriched", collection.total_enriched ?? responseData.summary?.total_enriched ?? 0, "IoCs"],
         ["Stopped", stoppedReason, "reason"],
-        ["Coverage", collection.coverage_status || "n/a", "time window"],
-        ["Earliest Fetched", formatTimestampForReport(earliestFetchedTimestamp), "timestamp"],
-        ["Latest Fetched", formatTimestampForReport(latestFetchedTimestamp), "timestamp"],
-        ["Earliest Parsed", formatTimestampForReport(earliestParsedTimestamp), "diagnostic only"],
-        ["Latest Parsed", formatTimestampForReport(latestParsedTimestamp), "diagnostic only"],
+        ["Coverage", collection.coverage_status || "n/a", "sample"],
+        ...(collectionMode === "time_window" ? [
+            ["GTI Filter Sent", gtiFilterSent, "filter"],
+            ["Earliest matched on", formatTimestampForReport(earliestMatchedOnTimestamp), "timestamp"],
+            ["Latest matched on", formatTimestampForReport(latestMatchedOnTimestamp), "timestamp"],
+        ] : []),
     ];
     const diagnosticsTable = pageDiagnostics.length ? `
         <details class="diagnostics-block">
@@ -2803,11 +2817,13 @@ function RecentExposureCollectionSummary(responseData) {
             </div>
             <p class="compact-note">Stopped reason: ${escapeHtml(String(diagnostics.stopped_reason || collection.stopped_reason || "unknown"))}. Unique IoCs: ${escapeHtml(String(diagnostics.unique_ioc_count ?? collection.unique_ioc_count ?? 0))}. Duplicates removed: ${escapeHtml(String(diagnostics.duplicates_removed ?? collection.duplicates_removed ?? 0))}.</p>
             <p class="compact-note">Raw IoCs: ${escapeHtml(String(diagnostics.raw_ioc_count ?? collection.raw_ioc_count ?? 0))}. Items with stream timestamp: ${escapeHtml(String(diagnostics.items_with_stream_timestamp ?? collection.items_with_stream_timestamp ?? 0))}. Items without stream timestamp: ${escapeHtml(String(diagnostics.items_without_stream_timestamp ?? collection.items_without_stream_timestamp ?? collection.items_without_stream_timestamp_count ?? 0))}.</p>
+            <p class="compact-note">GTI order sent: ${escapeHtml(String(gtiOrderSent))}. Effective order: ${escapeHtml(String(gtiOrderEffective))}.</p>
             ${serverDateDiagnosticsLine}
-            <p class="compact-note">Stream timestamp fields seen: ${escapeHtml(String(streamTimestampFields.join?.(", ") || "none"))}. Object metadata timestamp fields seen: ${escapeHtml(String(objectTimestampFields.join?.(", ") || "none"))}.</p>
+            <p class="compact-note">Matched on fields seen: ${escapeHtml(String(streamTimestampFields.join?.(", ") || "none"))}.</p>
+            <p class="compact-note">Notification dates: ${escapeHtml(String(diagnostics.notification_date_count ?? collection.notification_date_count ?? 0))}. Matched_on fallbacks: ${escapeHtml(String(diagnostics.matched_on_fallback_count ?? collection.matched_on_fallback_count ?? 0))}. Missing notification dates: ${escapeHtml(String(diagnostics.missing_notification_date_count ?? collection.missing_notification_date_count ?? 0))}. Notification IDs: ${escapeHtml(String(diagnostics.notification_id_count ?? collection.notification_id_count ?? 0))}.</p>
             <p class="compact-note">Timestamp fields seen: ${escapeHtml(String((diagnostics.timestamp_fields_seen || collection.timestamp_fields_seen || []).join?.(", ") || "none"))}. Stop timestamp field: ${escapeHtml(String(diagnostics.stop_timestamp_field || collection.stop_timestamp_field || "none"))}.</p>
-            <p class="compact-note">Oldest stream event timestamp: ${escapeHtml(String(formatTimestampForReport(diagnostics.oldest_stream_event_timestamp || collection.oldest_stream_event_timestamp)))}. Oldest object metadata timestamp: ${escapeHtml(String(formatTimestampForReport(diagnostics.oldest_object_metadata_timestamp || collection.oldest_object_metadata_timestamp)))}.</p>
-            <p class="compact-note">Ignored old object metadata timestamps: ${escapeHtml(String(diagnostics.ignored_object_metadata_old_timestamp_count ?? collection.ignored_object_metadata_old_timestamp_count ?? 0))}. Items without stream timestamp: ${escapeHtml(String(diagnostics.items_without_stream_timestamp_count ?? collection.items_without_stream_timestamp_count ?? 0))}.</p>
+            <p class="compact-note">Oldest matched on timestamp: ${escapeHtml(String(formatTimestampForReport(diagnostics.oldest_stream_event_timestamp || collection.oldest_stream_event_timestamp)))}.</p>
+            <p class="compact-note">Items without matched on: ${escapeHtml(String(diagnostics.items_without_stream_timestamp_count ?? collection.items_without_stream_timestamp_count ?? 0))}.</p>
         </details>
     ` : "";
     const timestampDiagnosticsTable = timestampDiagnosticRows.length ? `
@@ -2851,17 +2867,16 @@ function RecentExposureCollectionSummary(responseData) {
             <p><strong>Pages fetched:</strong> ${escapeHtml(String(collection.pages_fetched ?? responseData.summary?.pages_fetched ?? 0))}</p>
             <p><strong>Max pages:</strong> ${escapeHtml(String(collection.max_pages ?? collection.requested_pages ?? "n/a"))}</p>
             <p><strong>Page size:</strong> ${escapeHtml(String(collection.page_size ?? responseData.summary?.page_size ?? "n/a"))}</p>
+            <p><strong>GTI order sent:</strong> ${escapeHtml(String(gtiOrderSent))}</p>
             <p><strong>Raw IoCs fetched:</strong> ${escapeHtml(String(collection.raw_ioc_count ?? responseData.summary?.raw_ioc_count ?? 0))}</p>
-            <p><strong>${collectionMode === "time_window" ? "IoCs returned by GTI date filter" : "IoCs inside selected window"}:</strong> ${escapeHtml(String(insideWindowValue))}</p>
+            <p><strong>${collectionMode === "time_window" ? "IoCs returned by GTI filter" : "Fetched IoCs"}:</strong> ${escapeHtml(String(insideWindowValue))}</p>
             <p><strong>Unique IoCs after deduplication:</strong> ${escapeHtml(String(collection.unique_ioc_count ?? responseData.summary?.unique_ioc_count ?? 0))}</p>
             <p><strong>Duplicates removed:</strong> ${escapeHtml(String(collection.duplicates_removed ?? responseData.summary?.duplicates_removed ?? 0))}</p>
             <p><strong>Stopped reason:</strong> ${escapeHtml(String(stoppedReason))}</p>
-            ${collectionMode === "time_window" ? "" : `<p><strong>Earliest fetched timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(earliestFetchedTimestamp)))}</p>`}
-            ${collectionMode === "time_window" ? "" : `<p><strong>Latest fetched timestamp:</strong> ${escapeHtml(String(formatTimestampForReport(latestFetchedTimestamp)))}</p>`}
-            <p><strong>Earliest parsed timestamp (diagnostic only):</strong> ${escapeHtml(String(formatTimestampForReport(earliestParsedTimestamp)))}</p>
-            <p><strong>Latest parsed timestamp (diagnostic only):</strong> ${escapeHtml(String(formatTimestampForReport(latestParsedTimestamp)))}</p>
+            ${collectionMode === "time_window" ? `<p><strong>Earliest matched on:</strong> ${escapeHtml(String(formatTimestampForReport(earliestMatchedOnTimestamp)))}</p>` : ""}
+            ${collectionMode === "time_window" ? `<p><strong>Latest matched on:</strong> ${escapeHtml(String(formatTimestampForReport(latestMatchedOnTimestamp)))}</p>` : ""}
             ${collectionMode === "time_window" ? `<p><strong>Coverage status:</strong> ${escapeHtml(String(collection.coverage_status || "unknown"))}</p>` : ""}
-            ${collectionMode === "time_window" ? `<p><strong>GTI date filter sent:</strong> ${escapeHtml(String(collection.server_side_date_filter_string || "n/a"))}</p>` : ""}
+            ${collectionMode === "time_window" ? `<p><strong>GTI filter sent:</strong> ${escapeHtml(String(gtiFilterSent))}</p>` : ""}
             ${recommendation ? `<p><strong>Recommendation:</strong> ${escapeHtml(String(recommendation))}</p>` : ""}
             <div class="kpi-grid ioc-summary-grid">
                 ${cards.map(([label, value, hint]) => `
@@ -2872,7 +2887,7 @@ function RecentExposureCollectionSummary(responseData) {
                     </div>
                 `).join("")}
             </div>
-            <p class="compact-note">${collectionMode === "time_window" ? "IoC Stream was fetched with the GTI date filter. Parsed timestamps are shown for diagnostics only." : "IoC Stream is chronological. This report summarizes the recent pages returned by the API, not a guaranteed complete time window."}</p>
+            <p class="compact-note">${collectionMode === "time_window" ? "IoC Stream was fetched with the GTI matched-on date filter. Results are a GTI-filtered sample, not a complete coverage claim." : "Diagnostic mode only: this endpoint may not reflect the newest Matched on dates without a GTI date filter."}</p>
             ${warnings.length ? `<div class="diagnostic-warning compact">${warnings.map((warning) => `<p>${escapeHtml(String(warning))}</p>`).join("")}</div>` : ""}
             ${diagnosticsTable}
             ${timestampDiagnosticsTable}
@@ -3334,7 +3349,9 @@ async function exportDtmDashboardDocx() {
     clearMessage();
 
     try {
-        const payload = { dashboard_result: { ...lastDtmDashboardResponse } };
+        const maxItemsInput = document.getElementById("dtm_dashboard_chart_max_items");
+        const maxChartItems = maxItemsInput ? Math.max(1, parseInt(maxItemsInput.value, 10) || 10) : 10;
+        const payload = { dashboard_result: { ...lastDtmDashboardResponse }, max_chart_items: maxChartItems };
         const response = await fetch("/export/dtm-dashboard-docx", {
             method: "POST",
             headers: { "Content-Type": "application/json" },

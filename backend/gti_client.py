@@ -39,49 +39,26 @@ MAX_VT_URL_ID_BYTES = 500
 MAX_URL_ENRICHMENT_INPUT_BYTES = 350
 IOC_STREAM_COLLECTION_MODES = {"recent_pages", "time_window"}
 IOC_STREAM_TIME_WINDOWS = {"last_24h", "last_7d", "last_30d", "custom"}
+IOC_STREAM_ORDER_VALUES = {"date", "date-", "date+"}
+DEFAULT_IOC_STREAM_ORDER = "date-"
+IOC_STREAM_ORDER_FALLBACK_WARNING = (
+    "GTI rejected order=date-, fallback order=date was used."
+)
 IOC_STREAM_EVENT_TIMESTAMP_FIELDS = (
+    "context_attributes.notification_date",
     "matched_on",
-    "matched_at",
-    "matched_date",
-    "match_date",
-    "match_time",
-    "notification_date",
-    "notification_time",
-    "last_notification_date",
-    "ioc_stream_date",
-    "ioc_stream_timestamp",
 )
-IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS = (
-    "creation_date",
-    "first_seen",
-    "first_submission_date",
-    "last_analysis_date",
-    "last_modification_date",
-    "last_seen_itw_date",
-)
-IOC_STREAM_EXCLUDED_DATE_DIAGNOSTIC_FIELDS = {
-    "engine_update",
-    "timeout",
-    "confirmed_timeout",
-}
-IOC_STREAM_CREATED_AT_NOTIFICATION_TYPES = {
-    "ioc_stream",
-    "ioc_stream_notification",
-    "ioc_notification",
-    "notification",
-    "stream_notification",
-}
 IOC_STREAM_DISPLAY_VALUE_MAX_LENGTH = 120
 IOC_STREAM_SAMPLE_WARNING = (
-    "IoC Stream is chronological. This report summarizes the recent pages returned "
-    "by the API, not a guaranteed complete time window."
+    "Diagnostic mode only: this endpoint may not reflect the newest Matched on dates "
+    "without a GTI date filter."
 )
 IOC_STREAM_NO_TIMESTAMPS_WARNING = (
     "GTI returned IoCs, but no usable stream notification timestamps were exposed. "
     "Time-window filtering could not be applied safely."
 )
 IOC_STREAM_RECENT_MODE_RECOMMENDATION = (
-    "Use Recent chronological sample mode for this dataset."
+    "Use GTI matched-on date filter mode for this dataset."
 )
 DEFAULT_INTELLIGENCE_SEARCH_LIMIT = 10
 MAX_INTELLIGENCE_SEARCH_LIMIT = 40
@@ -201,12 +178,17 @@ MOCK_IOC_STREAM_PAYLOAD = {
         {
             "id": "login-security-check.example",
             "type": "domain",
+            "context_attributes": {
+                "notification_date": "2026-05-20T10:12:00Z",
+                "notification_id": "mock-notification-1",
+                "origin": "subscriptions",
+                "sources": [{"name": "Credential Theft Infrastructure"}],
+            },
             "attributes": {
                 "entity_type": "domain",
                 "source_type": "collection",
                 "source_name": "Credential Theft Infrastructure",
                 "origin": "subscriptions",
-                "matched_date": "2026-05-20T10:12:00Z",
                 "gti_score": 91,
                 "gti_verdict": "malicious",
             },
@@ -214,11 +196,16 @@ MOCK_IOC_STREAM_PAYLOAD = {
         {
             "id": "https://billing-example.net/session/verify",
             "type": "url",
+            "context_attributes": {
+                "notification_date": "2026-05-20T09:42:00Z",
+                "notification_id": "mock-notification-2",
+                "origin": "hunting",
+                "sources": [{"name": "Brand impersonation hunt"}],
+            },
             "attributes": {
                 "source_type": "Livehunt / Hunting ruleset",
                 "source_name": "Brand impersonation hunt",
                 "origin": "hunting",
-                "matched_date": "2026-05-20T09:42:00Z",
                 "score": 67,
                 "verdict": "suspicious",
             },
@@ -226,11 +213,16 @@ MOCK_IOC_STREAM_PAYLOAD = {
         {
             "id": "44d88612fea8a8f36de82e1278abb02f",
             "type": "file",
+            "context_attributes": {
+                "notification_date": "2026-05-19T18:15:00Z",
+                "notification_id": "mock-notification-3",
+                "origin": "hunting",
+                "sources": [{"name": "Windows loader retrohunt"}],
+            },
             "attributes": {
                 "source_type": "Retrohunt",
                 "source_name": "Windows loader retrohunt",
                 "origin": "hunting",
-                "matched_date": "2026-05-19T18:15:00Z",
                 "gti_score": 82,
                 "gti_verdict": "malicious",
             },
@@ -238,11 +230,16 @@ MOCK_IOC_STREAM_PAYLOAD = {
         {
             "id": "203.0.113.42",
             "type": "ip_address",
+            "context_attributes": {
+                "notification_date": "2026-05-19T14:03:00Z",
+                "notification_id": "mock-notification-4",
+                "origin": "subscriptions",
+                "sources": [{"name": "Suspicious infrastructure cluster"}],
+            },
             "attributes": {
                 "source_type": "threat_actor",
                 "source_name": "Suspicious infrastructure cluster",
                 "origin": "subscriptions",
-                "matched_date": "2026-05-19T14:03:00Z",
                 "gti_score": 38,
                 "gti_verdict": "undetected",
             },
@@ -250,31 +247,46 @@ MOCK_IOC_STREAM_PAYLOAD = {
         {
             "id": "cdn-update-check.example",
             "type": "domain",
+            "context_attributes": {
+                "notification_date": "2026-05-18T20:21:00Z",
+                "notification_id": "mock-notification-5",
+                "origin": "subscriptions",
+                "sources": [{"name": "Possible redirector set"}],
+            },
             "attributes": {
                 "source_type": "collection",
                 "source_name": "Possible redirector set",
                 "origin": "subscriptions",
-                "matched_date": "2026-05-18T20:21:00Z",
                 "gti_score": 12,
             },
         },
         {
             "id": "https://unknown.example/download",
             "type": "url",
+            "context_attributes": {
+                "notification_date": "2026-05-18T08:11:00Z",
+                "notification_id": "mock-notification-6",
+                "origin": "subscriptions",
+                "sources": [{"name": "Context collection"}],
+            },
             "attributes": {
                 "source_type": "collection",
                 "origin": "subscriptions",
-                "matched_date": "2026-05-18T08:11:00Z",
             },
         },
         {
             "id": "8.8.8.8",
             "type": "ip_address",
+            "context_attributes": {
+                "notification_date": "2026-05-17T11:00:00Z",
+                "notification_id": "mock-notification-7",
+                "origin": "subscriptions",
+                "sources": [{"name": "Context-only network indicator"}],
+            },
             "attributes": {
                 "source_type": "collection",
                 "source_name": "Context-only network indicator",
                 "origin": "subscriptions",
-                "matched_date": "2026-05-17T11:00:00Z",
                 "gti_verdict": "unknown",
             },
         },
@@ -286,9 +298,14 @@ MOCK_IOC_STREAM_PAYLOAD = {
                     "data": {"id": "rule-loader-family", "type": "hunting_ruleset"}
                 }
             },
+            "context_attributes": {
+                "notification_date": "2026-05-16T16:45:00Z",
+                "notification_id": "mock-notification-8",
+                "origin": "hunting",
+                "sources": [{"name": "rule-loader-family"}],
+            },
             "attributes": {
                 "origin": "hunting",
-                "notification_date": "2026-05-16T16:45:00Z",
                 "gti_assessment": {"score": 56, "verdict": "suspicious"},
             },
         },
@@ -526,15 +543,16 @@ def fetch_ioc_stream(
     origin: str = "all",
     descriptors_only: bool = False,
     cursor: str | None = None,
-    order: str = "date",
+    order: str = DEFAULT_IOC_STREAM_ORDER,
     pages_to_fetch: int = DEFAULT_IOC_STREAM_PAGES_TO_FETCH,
     max_pages: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     time_window: str | None = None,
-    collection_mode: str = "recent_pages",
+    collection_mode: str = "time_window",
+    advanced_gti_filter_override: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch recent IoC Stream pages or a GTI date-filtered sample."""
+    """Fetch an unfiltered IoC Stream sample or a GTI matched-on date filter sample."""
 
     normalized_api_key = api_key.strip()
     normalized_collection_mode = (collection_mode or "recent_pages").strip().casefold()
@@ -552,11 +570,18 @@ def fetch_ioc_stream(
         "origin",
     )
     normalized_cursor = cursor.strip() if cursor else ""
+    normalized_advanced_gti_filter_override = (
+        advanced_gti_filter_override.strip()
+        if isinstance(advanced_gti_filter_override, str)
+        else ""
+    )
 
     if not normalized_api_key:
         raise ValueError("A GTI/VirusTotal API key is required for IoC Stream.")
-    if order and order != "date":
-        raise ValueError("The IoC Stream order must be 'date'.")
+    normalized_order = (order or DEFAULT_IOC_STREAM_ORDER).strip().casefold()
+    if normalized_order not in IOC_STREAM_ORDER_VALUES:
+        allowed_display = ", ".join(sorted(IOC_STREAM_ORDER_VALUES))
+        raise ValueError(f"Invalid IoC Stream order. Allowed values: {allowed_display}.")
     requested_pages = max_pages if max_pages is not None else pages_to_fetch
     if requested_pages < 1 or requested_pages > MAX_IOC_STREAM_PAGES_TO_FETCH:
         raise ValueError(
@@ -581,19 +606,29 @@ def fetch_ioc_stream(
         and time_window_metadata is not None
     )
     server_side_date_filter_string = (
-        _build_ioc_stream_server_side_date_filter(time_window_metadata)
+        normalized_advanced_gti_filter_override
+        or _build_ioc_stream_server_side_date_filter(time_window_metadata)
         if use_server_side_date_filter
         else None
     )
-    combined_filters = (
-        [server_side_date_filter_string, *filters]
-        if server_side_date_filter_string
-        else list(filters)
+    combined_filters = []
+    if normalized_advanced_gti_filter_override and use_server_side_date_filter:
+        combined_filters = [normalized_advanced_gti_filter_override]
+    else:
+        combined_filters = (
+            [server_side_date_filter_string, *filters]
+            if server_side_date_filter_string
+            else list(filters)
+        )
+    gti_filter_sent = (
+        " ".join(combined_filters)
+        if combined_filters
+        else None
     )
 
     base_params: dict[str, Any] = {
         "descriptors_only": "true" if descriptors_only else "false",
-        "order": "date",
+        "order": normalized_order,
     }
     if combined_filters:
         base_params["filter"] = " ".join(combined_filters)
@@ -601,14 +636,21 @@ def fetch_ioc_stream(
         **base_params,
         "collection_mode": normalized_collection_mode,
         "collection_mode_label": (
-            "GTI date-filtered sample"
+            "GTI matched-on date filter"
             if normalized_collection_mode == "time_window"
-            else "Recent chronological sample"
+            else "Unfiltered IoC Stream sample (diagnostic)"
         ),
         "pages_to_fetch": normalized_pages_to_fetch,
         "max_pages": normalized_pages_to_fetch,
         "api_page_limit": IOC_STREAM_API_PAGE_LIMIT,
+        "gti_order_sent": normalized_order,
+        "gti_order_effective": normalized_order,
+        "gti_order_fallback_used": False,
         "use_server_side_date_filter": use_server_side_date_filter,
+        "advanced_gti_filter_override": (
+            normalized_advanced_gti_filter_override or None
+        ),
+        "gti_filter_sent": gti_filter_sent,
     }
     if limit is not None:
         request_params["compatibility_limit"] = limit
@@ -638,6 +680,13 @@ def fetch_ioc_stream(
                 "collection_mode": normalized_collection_mode,
                 "requested_pages": normalized_pages_to_fetch,
                 "page_size": IOC_STREAM_API_PAGE_LIMIT,
+                "gti_order_sent": normalized_order,
+                "gti_order_effective": normalized_order,
+                "gti_order_fallback_used": False,
+                "advanced_gti_filter_override": (
+                    normalized_advanced_gti_filter_override or None
+                ),
+                "gti_filter_sent": gti_filter_sent,
             },
             "endpoint_results": [
                 {
@@ -816,6 +865,10 @@ def fetch_ioc_stream(
     server_side_date_filter_metadata = {
         "server_side_date_filter_attempted": use_server_side_date_filter,
         "server_side_date_filter_string": server_side_date_filter_string,
+        "gti_filter_sent": gti_filter_sent,
+        "advanced_gti_filter_override": (
+            normalized_advanced_gti_filter_override or None
+        ),
         "server_side_date_filter_status": (
             "not_attempted" if not use_server_side_date_filter else "attempted"
         ),
@@ -826,6 +879,20 @@ def fetch_ioc_stream(
 
     warnings: list[str] = []
     attempt_result = fetch_pages_with_params(base_params)
+    effective_order = normalized_order
+    order_fallback_used = False
+    if (
+        normalized_order == "date-"
+        and int(attempt_result["final_status_code"]) == 400
+        and not attempt_result["fetched_items"]
+    ):
+        fallback_params = {**base_params, "order": "date"}
+        attempt_result = fetch_pages_with_params(fallback_params)
+        effective_order = "date"
+        order_fallback_used = True
+        warnings.append(IOC_STREAM_ORDER_FALLBACK_WARNING)
+        request_params["gti_order_effective"] = effective_order
+        request_params["gti_order_fallback_used"] = True
     if use_server_side_date_filter:
         first_status_code = int(attempt_result["final_status_code"])
         server_item_count = len(attempt_result["fetched_items"])
@@ -881,6 +948,13 @@ def fetch_ioc_stream(
         time_window_metadata=time_window_metadata,
         server_side_date_filter_metadata=server_side_date_filter_metadata,
     )
+    collection_metadata["gti_order_sent"] = normalized_order
+    collection_metadata["gti_order_effective"] = effective_order
+    collection_metadata["gti_order_fallback_used"] = order_fallback_used
+    collection_metadata["gti_filter_sent"] = gti_filter_sent
+    collection_metadata["advanced_gti_filter_override"] = (
+        normalized_advanced_gti_filter_override or None
+    )
     collection_metadata["page_diagnostics"] = page_diagnostics
     warnings = _ioc_stream_warnings(normalized_collection_mode, warnings)
 
@@ -922,7 +996,12 @@ def normalize_ioc_stream_item(item: dict[str, Any]) -> dict[str, Any]:
             ("origin", "source_origin", "notification_origin"),
         )
     ) or "Unknown"
-    matched_date = _stringify_value(_extract_stream_event_datetime_value(item))
+    context_attributes = _ioc_stream_context_attributes(item)
+    matched_datetime = extract_stream_event_datetime(item)
+    matched_date = matched_datetime.isoformat() if matched_datetime else None
+    notification_id = _stringify_value(context_attributes.get("notification_id"))
+    notification_origin = _stringify_value(context_attributes.get("origin"))
+    notification_sources = _extract_ioc_context_source_labels(context_attributes)
     gti_score = _extract_ioc_score(merged_fields)
     gti_verdict = _extract_ioc_verdict(merged_fields)
     classification = classify_ioc_risk(gti_score, gti_verdict)
@@ -936,6 +1015,9 @@ def normalize_ioc_stream_item(item: dict[str, Any]) -> dict[str, Any]:
         "source_name": source_name,
         "origin": origin,
         "matched_date": matched_date,
+        "notification_id": notification_id,
+        "notification_origin": notification_origin,
+        "notification_sources": notification_sources,
         "gti_score": gti_score,
         "gti_verdict": gti_verdict,
         "malicious": None,
@@ -1172,6 +1254,12 @@ def build_ioc_stream_report(
         "stopped_reason": collection_metadata.get("stopped_reason", "unknown"),
         "coverage_status": collection_metadata.get("coverage_status"),
         "recommendation": collection_metadata.get("recommendation"),
+        "gti_order_sent": collection_metadata.get("gti_order_sent"),
+        "gti_order_effective": collection_metadata.get("gti_order_effective"),
+        "gti_order_fallback_used": collection_metadata.get(
+            "gti_order_fallback_used",
+            False,
+        ),
         "time_window_filtering_applied": collection_metadata.get(
             "time_window_filtering_applied"
         ),
@@ -1182,6 +1270,22 @@ def build_ioc_stream_report(
         "items_without_stream_timestamp": collection_metadata.get(
             "items_without_stream_timestamp",
             collection_metadata.get("items_without_stream_timestamp_count", 0),
+        ),
+        "notification_date_count": collection_metadata.get(
+            "notification_date_count",
+            0,
+        ),
+        "matched_on_fallback_count": collection_metadata.get(
+            "matched_on_fallback_count",
+            0,
+        ),
+        "missing_notification_date_count": collection_metadata.get(
+            "missing_notification_date_count",
+            0,
+        ),
+        "notification_id_count": collection_metadata.get(
+            "notification_id_count",
+            0,
         ),
         "stream_timestamp_fields_seen": collection_metadata.get(
             "stream_timestamp_fields_seen",
@@ -1217,6 +1321,10 @@ def build_ioc_stream_report(
         ),
         "server_side_date_filter_string": collection_metadata.get(
             "server_side_date_filter_string"
+        ),
+        "gti_filter_sent": collection_metadata.get("gti_filter_sent"),
+        "advanced_gti_filter_override": collection_metadata.get(
+            "advanced_gti_filter_override"
         ),
         "server_side_date_filter_status": collection_metadata.get(
             "server_side_date_filter_status"
@@ -3798,7 +3906,7 @@ def _filter_mock_ioc_stream_payload(
 
 
 def extract_stream_event_datetime(item: dict[str, Any]) -> datetime | None:
-    """Return the IoC Stream notification timestamp, never object metadata dates."""
+    """Return the GTI UI Matched on timestamp only."""
 
     item_datetime, _ = _extract_stream_event_datetime_with_field(item)
     return item_datetime
@@ -3812,24 +3920,71 @@ def extract_object_metadata_datetime(item: dict[str, Any]) -> datetime | None:
 
 
 def _extract_stream_event_datetime_value(item: dict[str, Any]) -> Any:
-    for candidate in _find_ioc_date_fields(item):
-        if candidate["classification"] == "stream_timestamp":
-            return candidate["value"]
+    value, _ = _extract_stream_event_datetime_value_with_field(item)
+    return value
 
-    return None
+
+def _extract_stream_event_datetime_value_with_field(
+    item: dict[str, Any],
+) -> tuple[Any, str | None]:
+    notification_value, notification_field = (
+        _extract_notification_date_datetime_value_with_field(item)
+    )
+    if notification_field:
+        return notification_value, notification_field
+
+    return _extract_matched_on_datetime_value_with_field(item)
 
 
 def _extract_stream_event_datetime_with_field(
     item: dict[str, Any],
 ) -> tuple[datetime | None, str | None]:
-    for candidate in _find_ioc_date_fields(item):
-        if candidate["classification"] != "stream_timestamp":
-            continue
-        item_datetime = candidate.get("parsed_datetime")
-        if isinstance(item_datetime, datetime):
-            return item_datetime, str(candidate.get("key") or "")
+    value, field_name = _extract_stream_event_datetime_value_with_field(item)
+    item_datetime = _parse_ioc_stream_datetime(value)
+    if item_datetime is not None and field_name:
+        return item_datetime, field_name
 
     return None, None
+
+
+def extract_matched_on_datetime(item: dict[str, Any]) -> datetime | None:
+    return extract_stream_event_datetime(item)
+
+
+def _extract_notification_date_datetime_value_with_field(
+    item: dict[str, Any],
+) -> tuple[Any, str | None]:
+    context_attributes = _ioc_stream_context_attributes(item)
+    if "notification_date" not in context_attributes:
+        return None, None
+
+    value = context_attributes.get("notification_date")
+    if _parse_ioc_stream_datetime(value) is None:
+        return None, None
+
+    return value, "context_attributes.notification_date"
+
+
+def _extract_matched_on_datetime_value_with_field(
+    item: dict[str, Any],
+) -> tuple[Any, str | None]:
+    def visit(value: Any) -> tuple[Any, str | None]:
+        if isinstance(value, dict):
+            for raw_key, child_value in value.items():
+                normalized_key = _normalize_ioc_date_key(raw_key)
+                if normalized_key == "matched_on":
+                    return child_value, "matched_on"
+                found_value, found_field = visit(child_value)
+                if found_field:
+                    return found_value, found_field
+        elif isinstance(value, list):
+            for child_value in value:
+                found_value, found_field = visit(child_value)
+                if found_field:
+                    return found_value, found_field
+        return None, None
+
+    return visit(item)
 
 
 def _extract_object_metadata_datetime_with_field(
@@ -3851,31 +4006,43 @@ def _ioc_item_fields(item: dict[str, Any]) -> dict[str, Any]:
     return _merge_item_with_attributes(item, normalized_attributes)
 
 
+def _ioc_stream_context_attributes(item: dict[str, Any]) -> dict[str, Any]:
+    context_attributes = item.get("context_attributes", {})
+    return context_attributes if isinstance(context_attributes, dict) else {}
+
+
+def _extract_ioc_context_source_labels(
+    context_attributes: dict[str, Any],
+) -> list[str]:
+    sources = context_attributes.get("sources")
+    if not isinstance(sources, list):
+        return []
+
+    labels: list[str] = []
+    for source in sources:
+        if isinstance(source, dict):
+            label = _readable_ioc_value(
+                _first_present(source, ("name", "title", "label", "id", "type"))
+            )
+        else:
+            label = _readable_ioc_value(source)
+        if label:
+            labels.append(label)
+
+    return _dedupe_preserving_order(labels)
+
+
 def _normalize_ioc_date_key(key: Any) -> str:
     return str(key or "").strip().casefold().replace("-", "_")
 
 
 def _is_ioc_date_like_key(key: Any) -> bool:
     normalized_key = _normalize_ioc_date_key(key)
-    if not normalized_key:
-        return False
-    if normalized_key in IOC_STREAM_EXCLUDED_DATE_DIAGNOSTIC_FIELDS:
-        return False
-    if normalized_key in {
-        *IOC_STREAM_EVENT_TIMESTAMP_FIELDS,
-        *IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS,
-        "created_at",
-    }:
-        return True
-    return normalized_key.endswith("_date") or normalized_key.endswith("_timestamp")
+    return normalized_key == "matched_on"
 
 
 def _ioc_date_field_allows_numeric_string(normalized_key: str) -> bool:
-    return normalized_key in {
-        *IOC_STREAM_EVENT_TIMESTAMP_FIELDS,
-        *IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS,
-        "created_at",
-    }
+    return normalized_key == "matched_on"
 
 
 def _join_ioc_date_path(parent_path: str, key: Any) -> str:
@@ -3884,10 +4051,25 @@ def _join_ioc_date_path(parent_path: str, key: Any) -> str:
 
 
 def _find_ioc_date_fields(item: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return date-like fields with stream/object classification for diagnostics."""
+    """Return accepted IoC Stream timestamp fields for diagnostics."""
 
-    fields = _ioc_item_fields(item)
     found_fields: list[dict[str, Any]] = []
+    context_attributes = _ioc_stream_context_attributes(item)
+    if "notification_date" in context_attributes:
+        notification_value = context_attributes.get("notification_date")
+        notification_datetime = _parse_ioc_stream_datetime(notification_value)
+        if notification_datetime is not None:
+            found_fields.append(
+                {
+                    "key": "context_attributes.notification_date",
+                    "path": "context_attributes.notification_date",
+                    "value": notification_value,
+                    "parsed_datetime": notification_datetime,
+                    "classification": "stream_timestamp",
+                    "accepted_as_stream_timestamp": True,
+                    "rejected_as_object_metadata": False,
+                }
+            )
 
     def visit(value: Any, path: str = "") -> None:
         if isinstance(value, dict):
@@ -3908,31 +4090,15 @@ def _find_ioc_date_fields(item: dict[str, Any]) -> list[dict[str, Any]]:
                     else None
                 )
                 if parsed_datetime is not None:
-                    classification = "other_date"
-                    accepted_as_stream_timestamp = False
-                    if normalized_key in IOC_STREAM_EVENT_TIMESTAMP_FIELDS:
-                        classification = "stream_timestamp"
-                        accepted_as_stream_timestamp = True
-                    elif normalized_key == "created_at":
-                        if _created_at_is_stream_event(item, fields):
-                            classification = "stream_timestamp"
-                            accepted_as_stream_timestamp = True
-                        else:
-                            classification = "object_metadata"
-                    elif normalized_key in IOC_STREAM_OBJECT_METADATA_TIMESTAMP_FIELDS:
-                        classification = "object_metadata"
-
                     found_fields.append(
                         {
                             "key": normalized_key,
                             "path": child_path,
                             "value": child_value,
                             "parsed_datetime": parsed_datetime,
-                            "classification": classification,
-                            "accepted_as_stream_timestamp": accepted_as_stream_timestamp,
-                            "rejected_as_object_metadata": (
-                                classification == "object_metadata"
-                            ),
+                            "classification": "stream_timestamp",
+                            "accepted_as_stream_timestamp": True,
+                            "rejected_as_object_metadata": False,
                         }
                     )
                 visit(child_value, child_path)
@@ -3983,24 +4149,6 @@ def _build_ioc_stream_raw_item_timestamp_diagnostics(
             }
         )
     return diagnostics
-
-
-def _created_at_is_stream_event(item: dict[str, Any], fields: dict[str, Any]) -> bool:
-    type_candidates = (
-        item.get("type"),
-        fields.get("type"),
-        fields.get("object_type"),
-        fields.get("entity_type"),
-        fields.get("notification_type"),
-        fields.get("source_type"),
-    )
-    for candidate in type_candidates:
-        text = str(candidate or "").strip().casefold().replace("-", "_")
-        if text in IOC_STREAM_CREATED_AT_NOTIFICATION_TYPES:
-            return True
-        if "notification" in text and text not in IOC_STREAM_ENTITY_TYPES:
-            return True
-    return False
 
 
 def _parse_ioc_stream_datetime(value: Any) -> datetime | None:
@@ -4172,6 +4320,39 @@ def _object_metadata_timestamps_with_fields(
     return timestamps
 
 
+def _ioc_stream_notification_timestamp_counts(
+    items: list[dict[str, Any]],
+) -> dict[str, int]:
+    notification_date_count = 0
+    matched_on_fallback_count = 0
+    missing_notification_date_count = 0
+    notification_id_count = 0
+
+    for item in items:
+        context_attributes = _ioc_stream_context_attributes(item)
+        if _has_usable_field_value(context_attributes.get("notification_id")):
+            notification_id_count += 1
+
+        notification_value, _ = _extract_notification_date_datetime_value_with_field(
+            item
+        )
+        if notification_value is not None:
+            notification_date_count += 1
+            continue
+
+        missing_notification_date_count += 1
+        matched_on_value, _ = _extract_matched_on_datetime_value_with_field(item)
+        if _parse_ioc_stream_datetime(matched_on_value) is not None:
+            matched_on_fallback_count += 1
+
+    return {
+        "notification_date_count": notification_date_count,
+        "matched_on_fallback_count": matched_on_fallback_count,
+        "missing_notification_date_count": missing_notification_date_count,
+        "notification_id_count": notification_id_count,
+    }
+
+
 def _oldest_stream_event_timestamp_with_field(
     items: list[dict[str, Any]],
 ) -> tuple[datetime | None, str | None]:
@@ -4231,6 +4412,9 @@ def _build_ioc_stream_timestamp_diagnostics(
 ) -> dict[str, Any]:
     stream_timestamps = _stream_event_timestamps_with_fields(fetched_items)
     object_timestamps = _object_metadata_timestamps_with_fields(fetched_items)
+    notification_timestamp_counts = _ioc_stream_notification_timestamp_counts(
+        fetched_items
+    )
     oldest_stream_timestamp = (
         min((item_datetime for item_datetime, _ in stream_timestamps), default=None)
     )
@@ -4243,15 +4427,6 @@ def _build_ioc_stream_timestamp_diagnostics(
     object_metadata_timestamp_fields_seen: set[str] = {
         field_name for _, field_name in object_timestamps if field_name
     }
-    for item in fetched_items:
-        for candidate in _find_ioc_date_fields(item):
-            field_name = str(candidate.get("key") or "")
-            if not field_name:
-                continue
-            if candidate["classification"] == "stream_timestamp":
-                stream_timestamp_fields_seen.add(field_name)
-            elif candidate["classification"] == "object_metadata":
-                object_metadata_timestamp_fields_seen.add(field_name)
     timestamp_fields_seen = sorted(
         stream_timestamp_fields_seen | object_metadata_timestamp_fields_seen
     )
@@ -4272,6 +4447,7 @@ def _build_ioc_stream_timestamp_diagnostics(
         "raw_ioc_count": len(fetched_items),
         "items_with_stream_timestamp": len(stream_timestamps),
         "items_without_stream_timestamp": len(fetched_items) - len(stream_timestamps),
+        **notification_timestamp_counts,
         "stream_timestamp_fields_seen": sorted(stream_timestamp_fields_seen),
         "object_metadata_timestamp_fields_seen": sorted(
             object_metadata_timestamp_fields_seen
@@ -4334,9 +4510,9 @@ def _build_ioc_stream_collection_metadata(
     return {
         "collection_mode": collection_mode,
         "collection_mode_label": (
-            "GTI date-filtered sample"
+            "GTI matched-on date filter"
             if collection_mode == "time_window"
-            else "Recent chronological sample"
+            else "Unfiltered IoC Stream sample (diagnostic)"
         ),
         "time_window": _public_ioc_time_window_metadata(time_window_metadata),
         "total_collected": len(kept_items),

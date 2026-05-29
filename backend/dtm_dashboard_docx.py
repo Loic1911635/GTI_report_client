@@ -31,6 +31,7 @@ _SEVERITY_COLORS: dict[str, tuple[int, int, int]] = {
 def generate_dtm_dashboard_docx(
     dashboard_result: dict[str, Any],
     output_path: str,
+    max_chart_items: int = 10,
 ) -> str:
     """Render a DTM Monitor & Alert Dashboard as a Word document."""
 
@@ -50,6 +51,40 @@ def generate_dtm_dashboard_docx(
     monitors = _as_list(dashboard_result.get("monitors"))
     warnings = _as_list(dashboard_result.get("warnings"))
     limits = _as_dict(dashboard_result.get("limits"))
+
+    # Build per-monitor chart rows directly from the full monitors list so that
+    # max_chart_items is not limited by the [:10] hardcoded in the dashboard route.
+    _monitors_by_alert = sorted(
+        [m for m in monitors if _safe_int(_as_dict(m).get("alert_count")) > 0],
+        key=lambda r: (-_safe_int(_as_dict(r).get("alert_count")), str(_as_dict(r).get("name", "")).casefold()),
+    )
+    _monitors_by_risk = sorted(
+        [m for m in monitors if _safe_int(_as_dict(m).get("risk_score")) > 0],
+        key=lambda r: (-_safe_int(_as_dict(r).get("risk_score")), str(_as_dict(r).get("name", "")).casefold()),
+    )
+    _monitors_by_noise = sorted(
+        [m for m in monitors if _safe_int(_as_dict(m).get("noise_score")) > 0],
+        key=lambda r: (-_safe_int(_as_dict(r).get("noise_score")), str(_as_dict(r).get("name", "")).casefold()),
+    )
+
+    def _alert_count_rows(n: int) -> list[dict]:
+        return [{"monitor_name": _as_dict(r).get("name") or "Unknown",
+                 "alert_count": _safe_int(_as_dict(r).get("alert_count"))}
+                for r in _monitors_by_alert[:n]]
+
+    def _risk_score_rows(n: int) -> list[dict]:
+        return [{"monitor_name": _as_dict(r).get("name") or "Unknown",
+                 "risk_score": _safe_int(_as_dict(r).get("risk_score")),
+                 "high": _safe_int(_as_dict(r).get("high")),
+                 "medium": _safe_int(_as_dict(r).get("medium")),
+                 "low": _safe_int(_as_dict(r).get("low"))}
+                for r in _monitors_by_risk[:n]]
+
+    def _noise_score_rows(n: int) -> list[dict]:
+        return [{"monitor_name": _as_dict(r).get("name") or "Unknown",
+                 "noise_score": _safe_int(_as_dict(r).get("noise_score")),
+                 "risk_score": _safe_int(_as_dict(r).get("risk_score"))}
+                for r in _monitors_by_noise[:n]]
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     # ── Cover ───────────────────────────────────────────────────────────────
@@ -92,120 +127,55 @@ def generate_dtm_dashboard_docx(
     document.add_page_break()
     document.add_heading("Charts", level=1)
 
+    def _cs(title: str, rows: Any, label_key: str, value_key: str,
+            chart_type: str = "bar", width: float = 6.0, height: float | None = None) -> None:
+        """Shorthand: call _add_chart_section with the current max_chart_items."""
+        _add_chart_section(document, title, rows, label_key, value_key,
+                           chart_type=chart_type, width=width, height=height,
+                           max_items=max_chart_items)
+
     # ── Severity distribution: pie + donut + bar ─────────────────────────────
-    _add_chart_section(
-        document,
-        title="Alerts by Severity",
-        rows=charts.get("alerts_by_severity", []),
-        label_key="severity",
-        value_key="count",
-        chart_type="pie",
-        width=4.5,
-        height=3.0,
-    )
-    _add_chart_section(
-        document,
-        title="Alerts by Severity — Donut",
-        rows=charts.get("alerts_by_severity", []),
-        label_key="severity",
-        value_key="count",
-        chart_type="donut",
-        width=4.5,
-        height=3.0,
-    )
-    _add_chart_section(
-        document,
-        title="Alerts by Severity — Bars",
-        rows=charts.get("alerts_by_severity", []),
-        label_key="severity",
-        value_key="count",
-        chart_type="bar",
-        width=5.5,
-    )
+    _cs("Alerts by Severity", charts.get("alerts_by_severity", []),
+        "severity", "count", chart_type="pie", width=4.5, height=3.0)
+    _cs("Alerts by Severity — Donut", charts.get("alerts_by_severity", []),
+        "severity", "count", chart_type="donut", width=4.5, height=3.0)
+    _cs("Alerts by Severity — Bars", charts.get("alerts_by_severity", []),
+        "severity", "count", chart_type="bar", width=5.5)
 
     # ── Monitors with vs without alerts (new) ────────────────────────────────
     monitors_with = _safe_int(summary.get("monitors_with_alerts"))
     monitors_without = _safe_int(summary.get("monitors_without_alerts"))
     if monitors_with + monitors_without > 0:
-        _add_chart_section(
-            document,
-            title="Monitors with Alerts vs Inactive",
-            rows=[
-                {"label": "With alerts", "count": monitors_with},
-                {"label": "Inactive", "count": monitors_without},
-            ],
-            label_key="label",
-            value_key="count",
-            chart_type="pie",
-            width=4.5,
-            height=3.0,
-        )
-        _add_chart_section(
-            document,
-            title="Monitors with Alerts vs Inactive — Donut",
-            rows=[
-                {"label": "With alerts", "count": monitors_with},
-                {"label": "Inactive", "count": monitors_without},
-            ],
-            label_key="label",
-            value_key="count",
-            chart_type="donut",
-            width=4.5,
-            height=3.0,
-        )
+        _cs("Monitors with Alerts vs Inactive",
+            [{"label": "With alerts", "count": monitors_with},
+             {"label": "Inactive", "count": monitors_without}],
+            "label", "count", chart_type="pie", width=4.5, height=3.0)
+        _cs("Monitors with Alerts vs Inactive — Donut",
+            [{"label": "With alerts", "count": monitors_with},
+             {"label": "Inactive", "count": monitors_without}],
+            "label", "count", chart_type="donut", width=4.5, height=3.0)
 
     # ── Quota usage (new) ────────────────────────────────────────────────────
     quota_used = _safe_int(quota.get("monitor_count"))
     quota_remaining = _safe_int(quota.get("remaining_estimate"))
     if quota_used + quota_remaining > 0:
-        _add_chart_section(
-            document,
-            title="Monitor Quota Usage",
-            rows=[
-                {"label": "Used", "count": quota_used},
-                {"label": "Remaining", "count": quota_remaining},
-            ],
-            label_key="label",
-            value_key="count",
-            chart_type="donut",
-            width=4.5,
-            height=3.0,
-        )
+        _cs("Monitor Quota Usage",
+            [{"label": "Used", "count": quota_used},
+             {"label": "Remaining", "count": quota_remaining}],
+            "label", "count", chart_type="donut", width=4.5, height=3.0)
 
     # ── Top Monitors by Alert Count ──────────────────────────────────────────
-    _add_chart_section(
-        document,
-        title="Top Monitors by Alert Count",
-        rows=charts.get("top_monitors_by_alert_count", []),
-        label_key="monitor_name",
-        value_key="alert_count",
-        chart_type="bar",
-        width=6.0,
-    )
-    _add_chart_section(
-        document,
-        title="Top Monitors by Alert Count — Columns",
-        rows=charts.get("top_monitors_by_alert_count", []),
-        label_key="monitor_name",
-        value_key="alert_count",
-        chart_type="timeline",
-        width=6.0,
-        height=3.0,
-    )
+    _cs("Top Monitors by Alert Count", _alert_count_rows(max_chart_items),
+        "monitor_name", "alert_count", chart_type="bar", width=6.0)
+    _cs("Top Monitors by Alert Count — Columns", _alert_count_rows(max_chart_items),
+        "monitor_name", "alert_count", chart_type="timeline", width=6.0, height=3.0)
 
     # ── Top Monitors by Risk Score ───────────────────────────────────────────
-    _add_chart_section(
-        document,
-        title="Top Monitors by Risk Score",
-        rows=charts.get("top_monitors_by_risk_score", []),
-        label_key="monitor_name",
-        value_key="risk_score",
-        chart_type="bar",
-        width=6.0,
-    )
+    _cs("Top Monitors by Risk Score", _risk_score_rows(max_chart_items),
+        "monitor_name", "risk_score", chart_type="bar", width=6.0)
 
-    # ── High / Medium / Low breakdown per monitor (new stacked bars) ─────────
-    risk_rows = _as_list(charts.get("top_monitors_by_risk_score", []))
+    # ── High / Medium / Low breakdown per monitor (stacked bars) ─────────────
+    risk_rows = _risk_score_rows(max_chart_items)
     if risk_rows:
         risk_cats = [str(_as_dict(r).get("monitor_name") or "Unknown") for r in risk_rows]
         high_vals = [_safe_int(_as_dict(r).get("high", 0)) for r in risk_rows]
@@ -246,112 +216,35 @@ def generate_dtm_dashboard_docx(
                 pass
 
     # ── Alerts by Type ───────────────────────────────────────────────────────
-    _add_chart_section(
-        document,
-        title="Alerts by Type",
-        rows=charts.get("alerts_by_type", []),
-        label_key="type",
-        value_key="count",
-        chart_type="bar",
-        width=6.0,
-    )
-    _add_chart_section(
-        document,
-        title="Alerts by Type — Pie",
-        rows=charts.get("alerts_by_type", []),
-        label_key="type",
-        value_key="count",
-        chart_type="pie",
-        width=5.0,
-        height=3.0,
-    )
-    _add_chart_section(
-        document,
-        title="Alerts by Type — Donut",
-        rows=charts.get("alerts_by_type", []),
-        label_key="type",
-        value_key="count",
-        chart_type="donut",
-        width=5.0,
-        height=3.0,
-    )
+    _cs("Alerts by Type", charts.get("alerts_by_type", []),
+        "type", "count", chart_type="bar", width=6.0)
+    _cs("Alerts by Type — Pie", charts.get("alerts_by_type", []),
+        "type", "count", chart_type="pie", width=5.0, height=3.0)
+    _cs("Alerts by Type — Donut", charts.get("alerts_by_type", []),
+        "type", "count", chart_type="donut", width=5.0, height=3.0)
 
     # ── Alerts by Status ─────────────────────────────────────────────────────
-    _add_chart_section(
-        document,
-        title="Alerts by Status",
-        rows=charts.get("alerts_by_status", []),
-        label_key="status",
-        value_key="count",
-        chart_type="bar",
-        width=6.0,
-    )
-    _add_chart_section(
-        document,
-        title="Alerts by Status — Pie",
-        rows=charts.get("alerts_by_status", []),
-        label_key="status",
-        value_key="count",
-        chart_type="pie",
-        width=5.0,
-        height=3.0,
-    )
-    _add_chart_section(
-        document,
-        title="Alerts by Status — Donut",
-        rows=charts.get("alerts_by_status", []),
-        label_key="status",
-        value_key="count",
-        chart_type="donut",
-        width=5.0,
-        height=3.0,
-    )
+    _cs("Alerts by Status", charts.get("alerts_by_status", []),
+        "status", "count", chart_type="bar", width=6.0)
+    _cs("Alerts by Status — Pie", charts.get("alerts_by_status", []),
+        "status", "count", chart_type="pie", width=5.0, height=3.0)
+    _cs("Alerts by Status — Donut", charts.get("alerts_by_status", []),
+        "status", "count", chart_type="donut", width=5.0, height=3.0)
 
     # ── Timeline: vertical bar + line + area ─────────────────────────────────
-    _add_chart_section(
-        document,
-        title="Alerts Timeline (daily) — Columns",
-        rows=charts.get("alerts_timeline", []),
-        label_key="date",
-        value_key="count",
-        chart_type="timeline",
-        width=6.0,
-        height=3.0,
-    )
-    _add_chart_section(
-        document,
-        title="Alerts Timeline (daily) — Line",
-        rows=charts.get("alerts_timeline", []),
-        label_key="date",
-        value_key="count",
-        chart_type="line",
-        width=6.0,
-        height=3.0,
-    )
-    _add_chart_section(
-        document,
-        title="Alerts Timeline (daily) — Area",
-        rows=charts.get("alerts_timeline", []),
-        label_key="date",
-        value_key="count",
-        chart_type="area",
-        width=6.0,
-        height=3.0,
-    )
+    _cs("Alerts Timeline (daily) — Columns", charts.get("alerts_timeline", []),
+        "date", "count", chart_type="timeline", width=6.0, height=3.0)
+    _cs("Alerts Timeline (daily) — Line", charts.get("alerts_timeline", []),
+        "date", "count", chart_type="line", width=6.0, height=3.0)
+    _cs("Alerts Timeline (daily) — Area", charts.get("alerts_timeline", []),
+        "date", "count", chart_type="area", width=6.0, height=3.0)
 
     # ── Noisy monitors ───────────────────────────────────────────────────────
-    _add_chart_section(
-        document,
-        title="Noisy Monitors — Noise Score",
-        rows=charts.get("noisy_monitors", []),
-        label_key="monitor_name",
-        value_key="noise_score",
-        chart_type="bar",
-        width=6.0,
-    )
+    _cs("Noisy Monitors — Noise Score", _noise_score_rows(max_chart_items),
+        "monitor_name", "noise_score", chart_type="bar", width=6.0)
 
-    # ── Risk Score vs Noise Score per monitor (new clustered bar) ────────────
-    noisy_rows = _as_list(charts.get("noisy_monitors", []))
+    # ── Risk Score vs Noise Score per monitor (clustered bar) ────────────────
+    noisy_rows = _noise_score_rows(max_chart_items)
     if noisy_rows:
         noisy_cats = [str(_as_dict(r).get("monitor_name") or "Unknown") for r in noisy_rows]
         noisy_risk = [_safe_int(_as_dict(r).get("risk_score", 0)) for r in noisy_rows]
@@ -404,9 +297,12 @@ def _add_chart_section(
     chart_type: str = "bar",
     width: float = 6.0,
     height: float | None = None,
+    max_items: int | None = None,
 ) -> None:
     document.add_heading(title, level=2)
     data = _as_list(rows)
+    if max_items is not None and chart_type not in ("pie", "donut", "timeline", "line", "area"):
+        data = data[:max_items]
     labels = [str(_as_dict(r).get(label_key) or "Unknown") for r in data]
     values = [_safe_int(_as_dict(r).get(value_key, 0)) for r in data]
 

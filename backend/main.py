@@ -227,6 +227,7 @@ class DtmDashboardDocxExportRequest(BaseModel):
     """Input payload for DOCX export from an existing DTM Dashboard result."""
 
     dashboard_result: dict[str, Any] = Field(..., description="Already computed DTM Dashboard result.")
+    max_chart_items: int = Field(default=10, ge=1, le=100, description="Maximum number of items to show in bar charts (default 10).")
 
 
 class IndustrySnapshotExplorerResponse(BaseModel):
@@ -801,6 +802,7 @@ def export_dtm_dashboard_docx(request: DtmDashboardDocxExportRequest) -> FileRes
         generated_path = generate_dtm_dashboard_docx(
             dashboard_result=dashboard_result,
             output_path=str(output_path),
+            max_chart_items=request.max_chart_items,
         )
         return FileResponse(
             generated_path,
@@ -822,16 +824,17 @@ def api_ioc_stream_report(
     enrichment_limit: int | None = Query(default=None, ge=0, le=500),
     descriptors_only: bool = Query(default=False),
     cursor: str | None = Query(default=None),
-    order: str = Query(default="date"),
-    collection_mode: str = Query(default="recent_pages"),
+    order: str = Query(default="date-"),
+    collection_mode: str = Query(default="time_window"),
     time_window: str | None = Query(default=None),
     start_date: str | None = Query(default=None),
     end_date: str | None = Query(default=None),
+    advanced_gti_filter_override: str | None = Query(default=None),
     pages_to_fetch: int = Query(default=5),
     max_pages: int | None = Query(default=None),
     x_api_key: str = Header(default=""),
 ) -> dict[str, Any]:
-    """Return a read-only Recent IoC Stream Sample report from GTI IoC Stream."""
+    """Return a read-only IoC Stream report from GTI IoC Stream."""
 
     api_key = (x_api_key or os.environ.get("GTI_API_KEY") or "").strip()
     if not api_key:
@@ -852,6 +855,7 @@ def api_ioc_stream_report(
             time_window=time_window,
             start_date=start_date,
             end_date=end_date,
+            advanced_gti_filter_override=advanced_gti_filter_override,
             pages_to_fetch=pages_to_fetch,
             max_pages=max_pages,
         )
@@ -887,7 +891,7 @@ def api_ioc_stream_report(
             "message": (
                 "No recent IoC Stream indicators were returned for the requested pages."
                 if report["summary"]["total_iocs"] == 0
-                else "Recent IoC Stream Sample report generated."
+                else "IoC Stream report generated."
             ),
             **report,
         }

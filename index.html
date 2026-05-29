@@ -231,15 +231,15 @@
                     <div id="top-targets-estimate" class="estimate-panel" aria-live="polite"></div>
                 </div>
 
-                <!-- Recent IoC Stream Sample Report fields -->
+                <!-- IoC Stream Report fields -->
                 <div id="ioc-stream-fields" class="form-block" hidden>
                     <details class="sidebar-panel" open>
                         <summary>Stream sample</summary>
                         <label class="field">
                             <span>Collection mode</span>
                             <select id="ioc_stream_collection_mode" name="ioc_stream_collection_mode">
-                                <option value="recent_pages" selected>Recent chronological sample</option>
-                                <option value="time_window">Time window</option>
+                                <option value="time_window" selected>GTI matched-on date filter</option>
+                                <option value="recent_pages">Unfiltered IoC Stream sample (diagnostic)</option>
                             </select>
                         </label>
                         <label class="field">
@@ -257,7 +257,7 @@
                             <input id="ioc_stream_custom_pages" name="ioc_stream_custom_pages" type="number" value="10" min="1" max="50">
                         </label>
                         <label class="field" id="ioc_stream_time_window_field" hidden>
-                            <span>Time window</span>
+                            <span>GTI matched-on date filter</span>
                             <select id="ioc_stream_time_window" name="ioc_stream_time_window">
                                 <option value="last_24h" selected>Last 24h</option>
                                 <option value="last_7d">Last 7d</option>
@@ -275,6 +275,10 @@
                                 <input id="ioc_stream_end_date" name="ioc_stream_end_date" type="date">
                             </label>
                         </div>
+                        <label class="field" id="ioc_stream_advanced_filter_field" hidden>
+                            <span>Advanced GTI filter override <small>(optional)</small></span>
+                            <input id="ioc_stream_advanced_filter" name="ioc_stream_advanced_filter" type="text" placeholder="date:2026-05-14+ date:2026-05-17-">
+                        </label>
                         <label class="field">
                             <span>Entity Type</span>
                             <select id="ioc_stream_entity_type" name="ioc_stream_entity_type">
@@ -303,7 +307,7 @@
                     </details>
                     <div class="estimate-panel">
                         <strong>Read-only mode:</strong>
-                        Fetches the requested recent IoC Stream pages. Risk scoring requires enrichment and may generate one API lookup per unique IoC.
+                        Uses the GTI matched-on date filter by default. Risk scoring requires enrichment and may generate one API lookup per unique IoC.
                     </div>
                 </div>
 
@@ -330,6 +334,10 @@
                     </details>
                     <details class="sidebar-panel">
                         <summary>Export</summary>
+                        <label class="field">
+                            <span>Max items per bar chart</span>
+                            <input id="dtm_dashboard_chart_max_items" name="dtm_dashboard_chart_max_items" type="number" value="10" min="1" max="100">
+                        </label>
                         <button id="dtm-dashboard-docx-button" type="button" class="generate-button secondary-button btn-full" hidden disabled>Export Word Report</button>
                     </details>
                     <div class="estimate-panel">
