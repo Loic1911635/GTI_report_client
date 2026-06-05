@@ -1307,6 +1307,12 @@ def _append_ranking_tables(document: Document, context: dict[str, Any]) -> None:
                 # Vertical column chart
                 xml = _build_bar_chart_xml(labels, values, ranking_label + " — Columns", horizontal=False)
                 _insert_native_chart(document, xml, width_inches=6.0, height_inches=3.2)
+                # Pie chart — relative share
+                xml = _build_pie_chart_xml(labels, values, ranking_label + " — Pie")
+                _insert_native_chart(document, xml, width_inches=5.0, height_inches=3.2)
+                # Donut chart — modern alternative
+                xml = _build_donut_chart_xml(labels, values, ranking_label + " — Donut")
+                _insert_native_chart(document, xml, width_inches=5.0, height_inches=3.2)
         except Exception:
             pass
 

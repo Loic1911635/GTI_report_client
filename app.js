@@ -1709,7 +1709,7 @@ function renderRankingSectionContent(rankingKey, items, countLabel, emptyMessage
                 : "Field not present in GTI Intelligence Search preview for this sample");
         return `<p><em>${escapeHtml(msg)}</em></p>`;
     }
-    const chartHtml = rankingKey === "collection_type" ? renderDonutChartSvg(items, 8) : "";
+    const chartHtml = rankingKey !== "timeline" ? renderDonutChartSvg(items, 8) : "";
     return (chartHtml ? `<div class="ranking-viz">${chartHtml}</div>` : "") + renderRankingTable(items, countLabel);
 }
 
