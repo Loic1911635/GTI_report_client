@@ -10,6 +10,13 @@ on:
       - main
   workflow_dispatch:
 
+env:
+  AZURE_WEBAPP_NAME: app-loic-westeu-dev
+  AZURE_RESOURCE_GROUP: rg-app-loic-westeu-dev
+  AZURE_SUBSCRIPTION_ID: f9caaaca-cbad-4ba6-91b6-306279ab10d2
+  TEMP_ACCESS_RULE_NAME: gha-runner-${{ github.run_id }}-${{ github.run_attempt }}
+  TEMP_ACCESS_RULE_PRIORITY: 20000
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -56,6 +63,71 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: python-app
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ env.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+
+      - name: Detect GitHub runner public IP
+        id: runner-ip
+        run: |
+          RUNNER_IP="$(curl -fsSL https://api.ipify.org)"
+          echo "ip=${RUNNER_IP}" >> "$GITHUB_OUTPUT"
+          echo "Detected GitHub runner public IP."
+
+      - name: Add temporary App Service access restrictions
+        env:
+          RUNNER_IP: ${{ steps.runner-ip.outputs.ip }}
+        run: |
+          set -euo pipefail
+
+          remove_rule() {
+            local target="$1"
+            if [ "$target" = "scm" ]; then
+              az webapp config access-restriction remove \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --name "$AZURE_WEBAPP_NAME" \
+                --rule-name "$TEMP_ACCESS_RULE_NAME" \
+                --scm-site true \
+                >/dev/null 2>&1 || true
+            else
+              az webapp config access-restriction remove \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --name "$AZURE_WEBAPP_NAME" \
+                --rule-name "$TEMP_ACCESS_RULE_NAME" \
+                >/dev/null 2>&1 || true
+            fi
+          }
+
+          add_rule() {
+            local target="$1"
+            if [ "$target" = "scm" ]; then
+              az webapp config access-restriction add \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --name "$AZURE_WEBAPP_NAME" \
+                --rule-name "$TEMP_ACCESS_RULE_NAME" \
+                --action Allow \
+                --ip-address "${RUNNER_IP}/32" \
+                --priority "$TEMP_ACCESS_RULE_PRIORITY" \
+                --description "Temporary GitHub Actions runner IP for run ${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}" \
+                --scm-site true
+            else
+              az webapp config access-restriction add \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --name "$AZURE_WEBAPP_NAME" \
+                --rule-name "$TEMP_ACCESS_RULE_NAME" \
+                --action Allow \
+                --ip-address "${RUNNER_IP}/32" \
+                --priority "$TEMP_ACCESS_RULE_PRIORITY" \
+                --description "Temporary GitHub Actions runner IP for run ${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+            fi
+          }
+
+          remove_rule main
+          remove_rule scm
+          add_rule main
+          add_rule scm
       
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
@@ -64,3 +136,19 @@ jobs:
           app-name: 'app-loic-westeu-dev'
           slot-name: 'Production'
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_3B03FD7E8875494AA46A69D475BCFC95 }}
+
+      - name: Remove temporary App Service access restrictions
+        if: always()
+        run: |
+          az webapp config access-restriction remove \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --rule-name "$TEMP_ACCESS_RULE_NAME" \
+            >/dev/null 2>&1 || true
+
+          az webapp config access-restriction remove \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --rule-name "$TEMP_ACCESS_RULE_NAME" \
+            --scm-site true \
+            >/dev/null 2>&1 || true
