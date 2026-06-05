@@ -15,7 +15,7 @@ env:
   AZURE_RESOURCE_GROUP: rg-app-loic-westeu-dev
   AZURE_SUBSCRIPTION_ID: f9caaaca-cbad-4ba6-91b6-306279ab10d2
   TEMP_ACCESS_RULE_NAME: gha-runner-${{ github.run_id }}-${{ github.run_attempt }}
-  TEMP_ACCESS_RULE_PRIORITY: 20000
+  TEMP_ACCESS_RULE_PRIORITY: 50
 
 jobs:
   build:
@@ -128,6 +128,24 @@ jobs:
           remove_rule scm
           add_rule main
           add_rule scm
+
+      - name: Wait for SCM access restriction propagation
+        env:
+          RUNNER_IP: ${{ steps.runner-ip.outputs.ip }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for SCM access restriction to propagate..."
+          for i in {1..24}; do
+            code="$(curl -k -s -o /dev/null -w "%{http_code}" "https://${AZURE_WEBAPP_NAME}.scm.azurewebsites.net/")"
+            echo "Attempt $i: SCM HTTP status $code"
+            if [ "$code" != "403" ]; then
+              echo "SCM is no longer returning 403."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "SCM still returns 403 after waiting."
+          exit 1
       
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
