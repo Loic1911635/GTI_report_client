@@ -139,11 +139,10 @@ jobs:
             --query defaultHostName \
             -o tsv)"
 
-          SCM_HOSTNAME="$(echo "$DEFAULT_HOSTNAME" | sed 's/\.azurewebsites\.net$/.scm.azurewebsites.net/')"
+          SCM_HOSTNAME="$(echo "$DEFAULT_HOSTNAME" | sed -E 's/^([^.]+)\.([^.]+)\.azurewebsites\.net$/\1.scm.\2.azurewebsites.net/')"
 
           echo "Default hostname: $DEFAULT_HOSTNAME"
           echo "SCM hostname: $SCM_HOSTNAME"
-          echo "Waiting for SCM access restriction to propagate..."
 
           for i in {1..24}; do
             code="$(curl -k -s -o /dev/null -w "%{http_code}" "https://${SCM_HOSTNAME}/" || true)"
