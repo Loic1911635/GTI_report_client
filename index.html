@@ -44,11 +44,8 @@
                         <span>Report Type</span>
                         <select id="report_type" name="report_type" required>
                             <option value="IoC Enrichment">IoC Enrichment</option>
-                            <option value="Industry Snapshot Explorer">Industry Snapshot Explorer</option>
-                            <option value="Company Exposure / DTM">Company Exposure / DTM</option>
                             <option value="DTM Monitor &amp; Alert Dashboard">DTM Monitor &amp; Alert Dashboard</option>
                             <option value="Recent IoC Stream Sample Report">Recent IoC Stream Sample Report</option>
-                            <option value="GTI Intelligence Search">GTI Intelligence Search</option>
                             <option value="Top Targets Ranking">Top Targets Ranking</option>
                         </select>
                     </label>
@@ -59,44 +56,6 @@
                 </div>
 
                 <div class="form-sep"></div>
-
-                <!-- Intelligence Search fields -->
-                <div id="intelligence-search-fields" class="form-block" hidden>
-                    <label class="field">
-                        <span>Search Query</span>
-                        <input
-                            id="intelligence_query"
-                            name="intelligence_query"
-                            type="text"
-                            value='entity:collection "Belgian airport"'
-                            placeholder='entity:collection "Industry Snapshot"'
-                        >
-                    </label>
-                    <div class="field">
-                        <span>Preset Queries</span>
-                        <div class="preset-chip-grid">
-                            <button type="button" class="preset-chip" data-intelligence-query='entity:collection "Industry Snapshot"'>Industry Snapshot</button>
-                            <button type="button" class="preset-chip" data-intelligence-query='entity:collection "Aerospace &amp; Defense"'>Aerospace &amp; Defense</button>
-                            <button type="button" class="preset-chip" data-intelligence-query="entity:collection Transportation">Transportation</button>
-                            <button type="button" class="preset-chip" data-intelligence-query="entity:collection Belgium">Belgium</button>
-                            <button type="button" class="preset-chip" data-intelligence-query="entity:collection Eurocontrol">Eurocontrol</button>
-                        </div>
-                        <p class="field-note">Use entity:collection to focus on GTI collections.</p>
-                    </div>
-                    <div class="field-row">
-                        <label class="field">
-                            <span>Limit</span>
-                            <input id="intelligence_limit" name="intelligence_limit" type="number" value="10" min="1" max="40">
-                        </label>
-                        <div class="field checkbox-field">
-                            <span>Options</span>
-                            <label class="checkbox-option" for="intelligence_descriptors_only">
-                                <input id="intelligence_descriptors_only" name="intelligence_descriptors_only" type="checkbox">
-                                <span>Descriptors only</span>
-                            </label>
-                        </div>
-                    </div>
-                </div>
 
                 <!-- Top Targets fields -->
                 <div id="top-targets-fields" class="form-block" hidden>
@@ -346,27 +305,7 @@
                     </div>
                 </div>
 
-                <!-- Company / DTM fields -->
-                <div id="company-dtm-fields" class="form-block" hidden>
-                    <label class="field">
-                        <span>Company Name</span>
-                        <input id="company_name" name="company_name" type="text" placeholder="Contoso">
-                    </label>
-                    <label class="field">
-                        <span>Primary Domain</span>
-                        <input id="primary_domain" name="primary_domain" type="text" placeholder="example.com">
-                    </label>
-                    <label class="field">
-                        <span>Keywords</span>
-                        <input id="keywords" name="keywords" type="text" placeholder="Brand names, executives, comma-separated">
-                    </label>
-                    <label class="field">
-                        <span>Monitor ID <small>(optional)</small></span>
-                        <input id="monitor_id" name="monitor_id" type="text" placeholder="Filter DTM alerts to one monitor">
-                    </label>
-                </div>
-
-                <!-- Scope: Year + Target (IoC Enrichment / Industry Snapshot) -->
+                <!-- Scope: Year + Target -->
                 <div id="report-scope-fields" class="form-block">
                     <div class="field-row">
                         <label class="field">
@@ -419,16 +358,6 @@
                     <div id="report-actions">
                         <button id="generate-button" type="submit" class="generate-button btn-full">Generate Report</button>
                     </div>
-                    <div id="explorer-actions" hidden>
-                        <button id="explorer-button" type="button" class="generate-button btn-full">Run Explorer</button>
-                    </div>
-                    <div id="company-dtm-actions" class="dtm-actions" hidden>
-                        <button id="dtm-monitors-button" type="button" class="generate-button secondary-button btn-full">Test DTM Monitors</button>
-                        <button id="dtm-alerts-button" type="button" class="generate-button secondary-button btn-full">Test DTM Alerts</button>
-                    </div>
-                    <div id="intelligence-search-actions" hidden>
-                        <button id="intelligence-search-button" type="button" class="generate-button secondary-button btn-full">Search GTI</button>
-                    </div>
                     <div id="top-targets-actions" hidden>
                         <button id="top-targets-button" type="button" class="generate-button secondary-button btn-full">Run Ranking</button>
                     </div>
@@ -464,7 +393,6 @@
 
             <div class="tab-bar" role="tablist">
                 <button class="tab-btn active" data-tab="report" role="tab">Report</button>
-                <button class="tab-btn" data-tab="rankings" role="tab">Live Rankings</button>
                 <button class="tab-btn" data-tab="dtm-dashboard" role="tab">DTM Dashboard</button>
                 <button class="tab-btn" data-tab="ioc-stream" role="tab">Recent IoC Stream Sample</button>
                 <button class="tab-btn" data-tab="cross-analysis" role="tab">Cross-analysis</button>
@@ -478,37 +406,6 @@
                     <h3 id="empty-state-title">No report generated yet</h3>
                     <p id="empty-state-text">Fill in the form on the left and run a query — the result will appear here.</p>
                 </article>
-            </div>
-
-            <!-- Tab: Live Rankings -->
-            <div class="tab-panel" id="tab-rankings" role="tabpanel" hidden>
-                <div class="rankings-panel">
-                    <div class="stats-toolbar">
-                        <label class="field">
-                            <span>Year</span>
-                            <input id="stats_year" name="stats_year" type="number" value="2024" min="2018" max="2100">
-                        </label>
-                        <label class="field stats-target-field">
-                            <span>Filter by Target</span>
-                            <input id="stats_target" name="stats_target" type="text" placeholder="ex: finance, microsoft…">
-                        </label>
-                    </div>
-                    <div class="stats-charts-grid">
-                        <div class="stats-chart-panel">
-                            <h3 class="stats-chart-title">Top 10 Industries</h3>
-                            <div id="industries-chart" class="chart-area">
-                                <p><em>Run Top Rankings to populate this tab.</em></p>
-                            </div>
-                        </div>
-                        <div class="stats-chart-panel">
-                            <h3 class="stats-chart-title">Top 10 Companies / Organizations</h3>
-                            <div id="companies-chart" class="chart-area">
-                                <p><em>Run Top Rankings to populate this tab.</em></p>
-                            </div>
-                            <div id="companies-source-badge" class="source-badge-area"></div>
-                        </div>
-                    </div>
-                </div>
             </div>
 
             <!-- Tab: DTM Dashboard -->

@@ -62,8 +62,10 @@ class IocStreamReportTests(unittest.TestCase):
         self.assertEqual(report["summary"]["high_risk"], 1)
         self.assertEqual(report["summary"]["unknown_risk"], 2)
         self.assertEqual(report["summary"]["main_entity_type"], "domain")
-        self.assertEqual(report["top_indicators"][0]["value"], "example.com")
-        self.assertEqual(report["top_indicators"][1]["severity"], "Unknown")
+        self.assertTrue(report["privacy"]["indicator_values_removed"])
+        self.assertNotIn("top_indicators", report)
+        self.assertNotIn("indicators", report)
+        self.assertEqual(report["charts"]["by_entity_type"][0]["label"], "domain")
         self.assertTrue(report["definitions"])
 
     def test_build_ioc_stream_report_handles_empty_response(self) -> None:
@@ -138,8 +140,14 @@ class IocStreamReportTests(unittest.TestCase):
         )
 
         self.assertEqual(analytics["enriched_indicator_count"], 4)
-        self.assertEqual(analytics["top_dangerous_indicators"][0]["indicator"], "danger.example")
-        self.assertEqual(analytics["top_dangerous_indicators"][0]["malicious"], 3)
+        self.assertEqual(
+            analytics["dangerous_indicator_summary"]["malicious_indicator_count"],
+            1,
+        )
+        self.assertEqual(
+            analytics["dangerous_indicator_summary"]["highest_malicious_detections"],
+            3,
+        )
         self.assertEqual(analytics["highest_risk_by_ioc_type"][0]["ioc_type"], "domain")
         self.assertEqual(analytics["highest_risk_by_ioc_type"][0]["average_risk_score"], 90.0)
         risk_distribution = {
@@ -1515,15 +1523,11 @@ class IocStreamReportTests(unittest.TestCase):
 
         self.assertEqual(report["summary"]["total_iocs"], 1)
         self.assertEqual(report["collection"]["duplicates_removed"], 1)
-        indicator = report["indicators"][0]
-        self.assertEqual(indicator["value"], long_url)
-        self.assertEqual(len(indicator["display_value"]), 120)
-        self.assertTrue(indicator["display_value"].endswith("..."))
-        self.assertEqual(
-            indicator["ioc_key"],
-            gti_client.stable_ioc_key("url", long_url),
-        )
-        self.assertEqual(len(indicator["ioc_key"]), 64)
+        self.assertTrue(report["privacy"]["indicator_values_removed"])
+        self.assertNotIn("indicators", report)
+        self.assertNotIn("top_indicators", report)
+        serialized_report = json.dumps(report)
+        self.assertNotIn(long_url, serialized_report)
         self.assertNotIn(long_url, report["charts"]["by_entity_type"][0].values())
 
     @patch("backend.gti_client._probe_json_endpoint")
@@ -1575,10 +1579,9 @@ class IocStreamReportTests(unittest.TestCase):
         )
 
         mock_probe.assert_not_called()
-        indicator = report["indicators"][0]
-        self.assertEqual(indicator["value"], long_url)
-        self.assertEqual(indicator["enrichment_status"], "skipped")
-        self.assertIn("URL too long", indicator["enrichment_error"])
+        self.assertTrue(report["privacy"]["indicator_values_removed"])
+        self.assertNotIn("indicators", report)
+        self.assertNotIn(long_url, json.dumps(report))
         self.assertEqual(report["summary"]["total_iocs"], 1)
         self.assertEqual(report["technical_details"]["enrichment"]["attempted"], 1)
         self.assertEqual(report["technical_details"]["enrichment"]["succeeded"], 0)
@@ -1665,10 +1668,10 @@ class IocStreamReportTests(unittest.TestCase):
             report["technical_details"]["diagnostics"]["duplicate_count"],
             1,
         )
-        self.assertEqual(
-            [indicator["value"] for indicator in report["indicators"]],
-            ["duplicate.example", "unique.example"],
-        )
+        self.assertTrue(report["privacy"]["indicator_values_removed"])
+        self.assertNotIn("indicators", report)
+        self.assertNotIn("duplicate.example", json.dumps(report))
+        self.assertNotIn("unique.example", json.dumps(report))
 
     def test_enriched_risk_context_without_detections_is_low_not_unknown(self) -> None:
         classification = gti_client.classify_enriched_ioc_risk(

@@ -21,14 +21,7 @@ from backend.gti_client import (
     MAX_TOP_TARGETS_DETAIL_LOOKUPS,
     MockGTIClient,
     aggregate_top_targets,
-    explore_industry_snapshots,
     fetch_ioc_stream,
-    get_collection_details,
-    get_top_companies,
-    get_top_industries,
-    intelligence_search,
-    list_dtm_alerts,
-    list_dtm_monitors,
     lookup_domain,
     test_single_mitre_tree,
 )
@@ -108,34 +101,8 @@ class GenerateReportResponse(BaseModel):
     downloadable_filename: str
 
 
-class ExplorerRequest(BaseModel):
-    """Input payload for GTI exploration workflows."""
-
-    api_key: str = Field(..., description="GTI or VirusTotal API key.")
-    company_name: str | None = Field(default=None)
-    primary_domain: str | None = Field(default=None)
-    keywords: str | None = Field(default=None)
-    monitor_id: str | None = Field(default=None)
-
-
-class IntelligenceSearchRequest(BaseModel):
-    """Input payload for the GTI Intelligence Search workflow."""
-
-    api_key: str = Field(..., description="GTI or VirusTotal API key.")
-    query: str = Field(..., description="GTI Intelligence Search query.")
-    limit: int = Field(default=10, ge=1, description="Requested result page size.")
-    descriptors_only: bool = Field(
-        default=False,
-        description="Request descriptors_only mode from the GTI API.",
-    )
-    cursor: str | None = Field(
-        default=None,
-        description="Optional pagination cursor for the next GTI page.",
-    )
-
-
 class CollectionDetailsRequest(BaseModel):
-    """Input payload for the Industry Profile Analyzer workflow."""
+    """Input payload for single-collection diagnostics."""
 
     api_key: str = Field(..., description="GTI or VirusTotal API key.")
     collection_id: str = Field(..., description="GTI collection identifier.")
@@ -230,75 +197,6 @@ class DtmDashboardDocxExportRequest(BaseModel):
     max_chart_items: int = Field(default=10, ge=1, le=100, description="Maximum number of items to show in bar charts (default 10).")
 
 
-class IndustrySnapshotExplorerResponse(BaseModel):
-    """Response payload returned by the Industry Snapshot explorer."""
-
-    status: str
-    http_status: int
-    snapshot_count: int
-    snapshots: list[dict[str, Any]]
-    endpoint_results: list[dict[str, Any]]
-    raw_json: Any
-
-
-class DTMMonitorExplorerResponse(BaseModel):
-    """Response payload returned by the DTM Monitor explorer."""
-
-    status: str
-    http_status: int
-    domain_filter: str
-    requested_size: int
-    page_count: int
-    truncated: bool
-    total_collected: int
-    total_monitor_count: int
-    monitor_count: int
-    monitors: list[dict[str, Any]]
-    endpoint_results: list[dict[str, Any]]
-    raw_json: Any
-
-
-class DTMAlertExplorerResponse(BaseModel):
-    """Response payload returned by the DTM Alert explorer."""
-
-    status: str
-    http_status: int
-    requested_size: int
-    monitor_id: str
-    page_count: int
-    truncated: bool
-    total_collected: int
-    total_alert_count: int
-    alert_count: int
-    alerts: list[dict[str, Any]]
-    simplified_preview: list[dict[str, Any]]
-    endpoint_results: list[dict[str, Any]]
-    raw_data: Any
-    raw_json: Any
-
-
-class IntelligenceSearchResponse(BaseModel):
-    """Response payload returned by the GTI Intelligence Search workflow."""
-
-    status: str
-    status_code: int
-    total_collected: int
-    next_cursor: str | None = None
-    simplified_preview: list[dict[str, Any]]
-    raw_data: Any
-
-
-class CollectionDetailsResponse(BaseModel):
-    """Response payload returned by the Industry Profile Analyzer workflow."""
-
-    status: str
-    status_code: int
-    collection_id: str
-    experimental_exposure_score: int
-    analysis: dict[str, Any]
-    raw_data: Any
-
-
 class MitreTreeTestResponse(BaseModel):
     """Response payload returned by the direct MITRE tree diagnostic."""
 
@@ -350,14 +248,13 @@ def generate_report(request: GenerateReportRequest) -> GenerateReportResponse:
     normalized_target = request.target.strip() if request.target else None
 
     try:
-        if request.report_type == "Industry Snapshot Explorer":
-            raise ValueError("Use the explorer button for this report type.")
-        if request.report_type == "Company Exposure / DTM":
-            raise ValueError(
-                "Use the Test DTM Monitors or Test DTM Alerts buttons for this report type."
-            )
-        if request.report_type == "GTI Intelligence Search":
-            raise ValueError("Use the Search GTI button for this report type.")
+        retired_report_types = {
+            "Industry Snapshot Explorer",
+            "Company Exposure / DTM",
+            "GTI Intelligence Search",
+        }
+        if request.report_type in retired_report_types:
+            raise ValueError(f"The {request.report_type} feature has been retired.")
 
         normalized_sections = normalize_requested_sections(request.sections)
         normalized_output_format = normalize_output_format(request.output_format)
@@ -413,184 +310,6 @@ def generate_report(request: GenerateReportRequest) -> GenerateReportResponse:
             status_code=500,
             detail=f"Failed to generate report: {exc}",
         ) from exc
-
-
-@app.post(
-    "/explore/industry-snapshots",
-    response_model=IndustrySnapshotExplorerResponse,
-)
-def explore_industry_snapshot_workflow(
-    request: ExplorerRequest,
-) -> IndustrySnapshotExplorerResponse:
-    """Explore Industry Snapshot objects from GTI-safe endpoints."""
-
-    try:
-        exploration_result = explore_industry_snapshots(
-            api_key=request.api_key,
-        )
-
-        http_status = int(exploration_result["status_code"])
-        status = "success" if http_status == 200 else "upstream_error"
-
-        return IndustrySnapshotExplorerResponse(
-            status=status,
-            http_status=http_status,
-            snapshot_count=int(exploration_result["snapshot_count"]),
-            snapshots=exploration_result["snapshots"],
-            endpoint_results=exploration_result["endpoint_results"],
-            raw_json=exploration_result["raw_json"],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except GTIClientError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
-@app.post(
-    "/explore/dtm-monitors",
-    response_model=DTMMonitorExplorerResponse,
-)
-def explore_dtm_monitor_workflow(
-    request: ExplorerRequest,
-) -> DTMMonitorExplorerResponse:
-    """List DTM monitors from the GTI API."""
-
-    try:
-        exploration_result = list_dtm_monitors(
-            api_key=request.api_key,
-            primary_domain=request.primary_domain,
-        )
-
-        http_status = int(exploration_result["status_code"])
-        status = "success" if http_status == 200 else "upstream_error"
-
-        return DTMMonitorExplorerResponse(
-            status=status,
-            http_status=http_status,
-            domain_filter=str(exploration_result["domain_filter"]),
-            requested_size=int(exploration_result["requested_size"]),
-            page_count=int(exploration_result["page_count"]),
-            truncated=bool(exploration_result["truncated"]),
-            total_collected=int(exploration_result["total_collected"]),
-            total_monitor_count=int(exploration_result["total_monitor_count"]),
-            monitor_count=int(exploration_result["monitor_count"]),
-            monitors=exploration_result["monitors"],
-            endpoint_results=exploration_result["endpoint_results"],
-            raw_json=exploration_result["raw_json"],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except GTIClientError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
-@app.post(
-    "/explore/dtm-alerts",
-    response_model=DTMAlertExplorerResponse,
-)
-def explore_dtm_alert_workflow(
-    request: ExplorerRequest,
-) -> DTMAlertExplorerResponse:
-    """List DTM alerts from the GTI API."""
-
-    try:
-        exploration_result = list_dtm_alerts(
-            api_key=request.api_key,
-            monitor_id=request.monitor_id,
-        )
-
-        http_status = int(exploration_result["status_code"])
-        status = "success" if http_status == 200 else "upstream_error"
-
-        return DTMAlertExplorerResponse(
-            status=status,
-            http_status=http_status,
-            requested_size=int(exploration_result["requested_size"]),
-            monitor_id=str(exploration_result["monitor_id"]),
-            page_count=int(exploration_result["page_count"]),
-            truncated=bool(exploration_result["truncated"]),
-            total_collected=int(exploration_result["total_collected"]),
-            total_alert_count=int(exploration_result["total_alert_count"]),
-            alert_count=int(exploration_result["alert_count"]),
-            alerts=exploration_result["alerts"],
-            simplified_preview=exploration_result["simplified_preview"],
-            endpoint_results=exploration_result["endpoint_results"],
-            raw_data=exploration_result["raw_data"],
-            raw_json=exploration_result["raw_json"],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except GTIClientError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
-@app.post(
-    "/explore/intelligence-search",
-    response_model=IntelligenceSearchResponse,
-)
-def explore_intelligence_search_workflow(
-    request: IntelligenceSearchRequest,
-) -> IntelligenceSearchResponse:
-    """Run GTI Intelligence Search and return a simplified preview."""
-
-    try:
-        exploration_result = intelligence_search(
-            api_key=request.api_key,
-            query=request.query,
-            limit=request.limit,
-            descriptors_only=request.descriptors_only,
-            cursor=request.cursor,
-        )
-
-        status_code = int(exploration_result["status_code"])
-        status = "success" if status_code == 200 else "upstream_error"
-
-        return IntelligenceSearchResponse(
-            status=status,
-            status_code=status_code,
-            total_collected=int(exploration_result["total_collected"]),
-            next_cursor=exploration_result["next_cursor"],
-            simplified_preview=exploration_result["simplified_preview"],
-            raw_data=exploration_result["raw_data"],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except GTIClientError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
-@app.post(
-    "/explore/collection-details",
-    response_model=CollectionDetailsResponse,
-)
-def analyze_collection_workflow(
-    request: CollectionDetailsRequest,
-) -> CollectionDetailsResponse:
-    """Fetch detailed GTI collection fields for the Industry Profile Analyzer."""
-
-    try:
-        analysis_result = get_collection_details(
-            api_key=request.api_key,
-            collection_id=request.collection_id,
-        )
-
-        status_code = int(analysis_result["status_code"])
-        status = "success" if status_code == 200 else "upstream_error"
-
-        return CollectionDetailsResponse(
-            status=status,
-            status_code=status_code,
-            collection_id=str(analysis_result["collection_id"]),
-            experimental_exposure_score=int(
-                analysis_result["experimental_exposure_score"]
-            ),
-            analysis=analysis_result["analysis"],
-            raw_data=analysis_result["raw_data"],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except GTIClientError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post(
@@ -919,68 +638,6 @@ def _extract_upstream_error_detail(payload: Any) -> str:
     return str(payload.get("message") or payload.get("detail") or "").strip()
 
 
-@app.get("/api/industries")
-def api_industries(
-    year: int = Query(default=2024, ge=2018, le=2100),
-    top: int = Query(default=10, ge=1, le=50),
-    target: str | None = Query(default=None),
-    x_api_key: str = Header(default=""),
-) -> dict[str, Any]:
-    """Return the top N most targeted industries for the given year."""
-
-    if not x_api_key.strip():
-        raise HTTPException(status_code=401, detail="x-api-key header is required.")
-
-    cache_key = f"industries:{year}:{top}:{(target or '').strip().casefold()}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-
-    try:
-        result = get_top_industries(api_key=x_api_key, year=year, top_n=top, target=target)
-        _cache_set(cache_key, result)
-        return result
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except GTIClientError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Industry ranking failed: {exc}"
-        ) from exc
-
-
-@app.get("/api/companies")
-def api_companies(
-    year: int = Query(default=2024, ge=2018, le=2100),
-    top: int = Query(default=10, ge=1, le=50),
-    target: str | None = Query(default=None),
-    x_api_key: str = Header(default=""),
-) -> dict[str, Any]:
-    """Return the top N most targeted companies/organizations for the given year."""
-
-    if not x_api_key.strip():
-        raise HTTPException(status_code=401, detail="x-api-key header is required.")
-
-    cache_key = f"companies:{year}:{top}:{(target or '').strip().casefold()}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-
-    try:
-        result = get_top_companies(api_key=x_api_key, year=year, top_n=top, target=target)
-        _cache_set(cache_key, result)
-        return result
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except GTIClientError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Company ranking failed: {exc}"
-        ) from exc
-
-
 @app.post("/explore/countries-industries")
 def invalid_countries_industries_explorer() -> None:
     """Mark the old countries_industries explorer as invalid."""
@@ -989,6 +646,6 @@ def invalid_countries_industries_explorer() -> None:
         status_code=410,
         detail=(
             "The countries_industries explorer was removed and should no longer "
-            "be used. Use the Industry Snapshot Explorer instead."
+            "be used."
         ),
     )

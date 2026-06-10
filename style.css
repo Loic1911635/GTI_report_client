@@ -541,17 +541,12 @@ select:focus {
     to   { opacity: 1;   transform: translateY(0); }
 }
 
-#report-form[data-initialized] #intelligence-search-fields:not([hidden]),
 #report-form[data-initialized] #top-targets-fields:not([hidden]),
-#report-form[data-initialized] #company-dtm-fields:not([hidden]),
 #report-form[data-initialized] #ioc-stream-fields:not([hidden]),
 #report-form[data-initialized] #report-scope-fields:not([hidden]),
 #report-form[data-initialized] #report-sections-group:not([hidden]),
 #report-form[data-initialized] #output-format-group:not([hidden]),
 #report-form[data-initialized] #report-actions:not([hidden]),
-#report-form[data-initialized] #explorer-actions:not([hidden]),
-#report-form[data-initialized] #company-dtm-actions:not([hidden]),
-#report-form[data-initialized] #intelligence-search-actions:not([hidden]),
 #report-form[data-initialized] #top-targets-actions:not([hidden]),
 #report-form[data-initialized] #ioc-stream-actions:not([hidden]) {
     animation: fadeSlideIn 0.2s ease;
@@ -1032,26 +1027,7 @@ select:focus {
     font-weight: 700;
 }
 
-/* ── Rankings panel (Live Rankings tab) ────────────────── */
-
-.rankings-panel {
-    background: var(--panel-bg);
-    border-radius: var(--radius-lg);
-    border: 1px solid var(--border);
-    box-shadow: var(--shadow);
-    padding: 22px 24px;
-}
-
-.stats-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    margin-bottom: 18px;
-    align-items: flex-end;
-}
-
-.stats-toolbar .field { flex: 0 0 120px; }
-.stats-target-field   { flex: 1 1 180px !important; }
+/* Shared chart grids */
 
 .stats-charts-grid {
     display: grid;
@@ -1157,11 +1133,7 @@ select:focus {
     font-size: 0.8rem;
 }
 
-.source-badge-area { margin-top: 7px; display: flex; gap: 5px; }
-
 .source-badge { font-size: 0.7rem !important; padding: 2px 7px !important; opacity: 0.7; }
-
-.stats-error { color: var(--alert); font-size: 0.86rem; font-style: italic; }
 
 .ioc-stream-document {
     width: min(1120px, 100%);

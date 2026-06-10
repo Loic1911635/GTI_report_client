@@ -1002,6 +1002,8 @@ def normalize_ioc_stream_item(item: dict[str, Any]) -> dict[str, Any]:
     notification_id = _stringify_value(context_attributes.get("notification_id"))
     notification_origin = _stringify_value(context_attributes.get("origin"))
     notification_sources = _extract_ioc_context_source_labels(context_attributes)
+    threat_categories = _extract_ioc_stream_categories(merged_fields)
+    targeted_industries = _extract_ioc_stream_targeted_industries(merged_fields)
     gti_score = _extract_ioc_score(merged_fields)
     gti_verdict = _extract_ioc_verdict(merged_fields)
     classification = classify_ioc_risk(gti_score, gti_verdict)
@@ -1018,6 +1020,8 @@ def normalize_ioc_stream_item(item: dict[str, Any]) -> dict[str, Any]:
         "notification_id": notification_id,
         "notification_origin": notification_origin,
         "notification_sources": notification_sources,
+        "threat_categories": threat_categories,
+        "targeted_industries": targeted_industries,
         "gti_score": gti_score,
         "gti_verdict": gti_verdict,
         "malicious": None,
@@ -1380,17 +1384,13 @@ def build_ioc_stream_report(
     entity_counts = _count_ioc_field(indicators, "entity_type")
     risk_counts = _count_ioc_field(indicators, "severity")
     source_counts = _count_ioc_field(indicators, "source_type")
+    origin_counts = _count_ioc_field(indicators, "origin")
     action_counts = _count_ioc_field(indicators, "recommended_action")
+    threat_category_counts = _count_ioc_list_field(indicators, "threat_categories")
+    targeted_industry_counts = _count_ioc_list_field(indicators, "targeted_industries")
     main_entity_type = _main_ioc_bucket(entity_counts)
     main_source_type = _main_ioc_bucket(source_counts)
-    sorted_indicators = sorted(
-        indicators,
-        key=lambda indicator: (
-            -IOC_STREAM_RISK_ORDER.get(str(indicator.get("severity")), 0),
-            -(indicator.get("gti_score") if indicator.get("gti_score") is not None else -1),
-            str(indicator.get("ioc_key") or ""),
-        ),
-    )
+    trend_rows = _build_ioc_stream_trend_rows(indicators)
 
     summary = {
         "total_iocs": total,
@@ -1439,22 +1439,33 @@ def build_ioc_stream_report(
                 preferred_order=("High", "Medium", "Low", "Unknown"),
             ),
             "by_source_type": _counter_to_chart_rows(source_counts),
+            "by_origin": _counter_to_chart_rows(origin_counts),
+            "by_threat_category": _counter_to_chart_rows(threat_category_counts),
+            "by_targeted_industry": _counter_to_chart_rows(targeted_industry_counts),
             "by_recommended_action": _counter_to_chart_rows(action_counts),
+            "trend_over_time": trend_rows,
         },
-        "top_indicators": sorted_indicators[:10],
         "business_summary": build_business_summary(summary),
         "analytics": analytics,
-        "collection": collection_metadata,
+        "collection": _public_ioc_stream_collection(collection_metadata),
         "definitions": IOC_STREAM_DEFINITIONS,
-        "indicators": indicators,
+        "privacy": {
+            "indicator_values_removed": True,
+            "message": (
+                "Individual indicators, including IP addresses, domains, URLs, "
+                "and file hashes, are intentionally excluded from this report."
+            ),
+        },
         "technical_details": {
             "status_code": int(stream_result.get("status_code", 0)),
             "next_cursor": stream_result.get("next_cursor"),
             "request_params": stream_result.get("request_params", {}),
-            "endpoint_results": stream_result.get("endpoint_results", []),
+            "endpoint_results": _public_ioc_stream_endpoint_results(
+                stream_result.get("endpoint_results", [])
+            ),
             "warnings": stream_result.get("warnings", []),
-            "collection": collection_metadata,
-            "diagnostics": diagnostics,
+            "collection": _public_ioc_stream_collection(collection_metadata),
+            "diagnostics": _public_ioc_stream_collection(diagnostics),
             "enrichment": {
                 "enabled": bool(enrich),
                 "attempted": enrichment_attempted,
@@ -1509,12 +1520,15 @@ def build_ioc_stream_analytics(indicators: list[dict[str, Any]]) -> dict[str, An
         "source": "enriched_indicators_only",
         "enriched_indicator_count": len(enriched_indicators),
         "highest_risk_by_ioc_type": _build_ioc_type_risk_rows(enriched_indicators),
-        "top_dangerous_indicators": _build_top_dangerous_ioc_rows(enriched_indicators),
+        "dangerous_indicator_summary": _build_dangerous_ioc_summary(
+            enriched_indicators
+        ),
         "risk_distribution": _build_risk_distribution_rows(enriched_indicators),
         "ioc_type_distribution": _build_ioc_type_distribution_rows(enriched_indicators),
         "recommended_action_distribution": _build_recommended_action_distribution_rows(
             enriched_indicators
         ),
+        "risk_metrics": _build_ioc_risk_metrics(enriched_indicators),
         "business_insights": _build_ioc_business_insights(enriched_indicators),
     }
 
@@ -4660,6 +4674,39 @@ def _extract_ioc_source_name(
     return "Unknown"
 
 
+def _extract_ioc_stream_categories(fields: dict[str, Any]) -> list[str]:
+    category_values: list[str] = []
+    for key in (
+        "threat_categories",
+        "threat_category",
+        "categories",
+        "category",
+        "tags",
+        "tag",
+        "malware_families",
+        "malware_family",
+        "campaigns",
+        "campaign",
+    ):
+        category_values.extend(_extract_names_from_field(fields.get(key)))
+    return _dedupe_preserving_order(category_values)
+
+
+def _extract_ioc_stream_targeted_industries(fields: dict[str, Any]) -> list[str]:
+    industry_values: list[str] = []
+    for key in (
+        "targeted_industries",
+        "targeted_industry",
+        "targeted_industries_free",
+        "industries",
+        "industry",
+        "victim_industries",
+        "affected_industries",
+    ):
+        industry_values.extend(_extract_names_from_field(fields.get(key)))
+    return _dedupe_preserving_order(industry_values)
+
+
 def _extract_relationship_type(value: Any) -> str | None:
     if isinstance(value, dict):
         data = value.get("data")
@@ -4928,6 +4975,22 @@ def _count_ioc_field(
     return counts
 
 
+def _count_ioc_list_field(
+    indicators: list[dict[str, Any]],
+    field_name: str,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for indicator in indicators:
+        values = indicator.get(field_name)
+        labels = values if isinstance(values, list) else []
+        if not labels:
+            labels = ["Unknown"]
+        for label_value in labels:
+            label = str(label_value or "Unknown")
+            counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
 def _main_ioc_bucket(counts: dict[str, int]) -> str:
     if not counts:
         return "Unknown"
@@ -4950,6 +5013,102 @@ def _counter_to_chart_rows(
             ),
         )
     ]
+
+
+def _build_ioc_stream_trend_rows(indicators: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    buckets: dict[str, dict[str, int]] = {}
+    undated_count = 0
+    for indicator in indicators:
+        indicator_datetime = _parse_ioc_stream_datetime(indicator.get("matched_date"))
+        if indicator_datetime is None:
+            undated_count += 1
+            continue
+        label = indicator_datetime.date().isoformat()
+        row = buckets.setdefault(
+            label,
+            {"High": 0, "Medium": 0, "Low": 0, "Unknown": 0},
+        )
+        risk = str(indicator.get("severity") or "Unknown")
+        row[risk if risk in row else "Unknown"] += 1
+
+    rows = []
+    for label in sorted(buckets):
+        counts = buckets[label]
+        total = sum(counts.values())
+        rows.append(
+            {
+                "id": stable_ioc_key("trend", label),
+                "label": label,
+                "value": total,
+                "count": total,
+                "high": counts["High"],
+                "medium": counts["Medium"],
+                "low": counts["Low"],
+                "unknown": counts["Unknown"],
+            }
+        )
+    if undated_count:
+        rows.append(
+            {
+                "id": stable_ioc_key("trend", "undated"),
+                "label": "Undated",
+                "value": undated_count,
+                "count": undated_count,
+                "high": 0,
+                "medium": 0,
+                "low": 0,
+                "unknown": undated_count,
+            }
+        )
+    return rows
+
+
+def _public_ioc_stream_collection(collection: dict[str, Any]) -> dict[str, Any]:
+    public_collection = dict(collection or {})
+    public_collection.pop("raw_item_timestamp_diagnostics", None)
+    if isinstance(public_collection.get("page_diagnostics"), list):
+        public_collection["page_diagnostics"] = _public_ioc_stream_page_diagnostics(
+            public_collection["page_diagnostics"]
+        )
+    return public_collection
+
+
+def _public_ioc_stream_page_diagnostics(page_diagnostics: Any) -> list[dict[str, Any]]:
+    public_pages: list[dict[str, Any]] = []
+    if not isinstance(page_diagnostics, list):
+        return public_pages
+    for page in page_diagnostics:
+        if not isinstance(page, dict):
+            continue
+        public_pages.append(
+            {
+                "page_number": page.get("page_number"),
+                "http_status": page.get("http_status"),
+                "raw_page_item_count": page.get("raw_page_item_count", 0),
+                "next_cursor_found": bool(page.get("next_cursor_found")),
+                "next_link_found": bool(page.get("next_link_found")),
+                "next_cursor_source": page.get("next_cursor_source"),
+                "ignored_cursor_reason": page.get("ignored_cursor_reason"),
+            }
+        )
+    return public_pages
+
+
+def _public_ioc_stream_endpoint_results(endpoint_results: Any) -> list[dict[str, Any]]:
+    public_results: list[dict[str, Any]] = []
+    if not isinstance(endpoint_results, list):
+        return public_results
+    for result in endpoint_results:
+        if not isinstance(result, dict):
+            continue
+        public_results.append(
+            {
+                "endpoint_name": result.get("endpoint_name"),
+                "http_status": result.get("http_status"),
+                "request_params": result.get("request_params", {}),
+            }
+        )
+    return public_results
 
 
 def _percentage(part: int, total: int) -> float:
@@ -5016,33 +5175,105 @@ def _build_ioc_type_risk_rows(
     )
 
 
-def _build_top_dangerous_ioc_rows(
+def _build_dangerous_ioc_summary(
     enriched_indicators: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    def sort_key(indicator: dict[str, Any]) -> tuple[Any, ...]:
-        reputation = _coerce_ioc_number(indicator.get("reputation"))
-        return (
-            -_safe_int(indicator.get("malicious")),
-            -_safe_int(indicator.get("suspicious")),
-            reputation is None,
-            reputation if reputation is not None else 0,
-            str(indicator.get("ioc_key") or ""),
-        )
-
-    return [
-        {
-            "ioc_key": indicator.get("ioc_key"),
-            "indicator": indicator.get("value"),
-            "display_value": indicator.get("display_value")
-            or _truncate_ioc_display_value(indicator.get("value")),
-            "type": indicator.get("entity_type"),
-            "malicious": _safe_int(indicator.get("malicious")),
-            "suspicious": _safe_int(indicator.get("suspicious")),
-            "reputation": _coerce_ioc_number(indicator.get("reputation")),
-            "recommended_action": indicator.get("recommended_action"),
+) -> dict[str, Any]:
+    if not enriched_indicators:
+        return {
+            "enriched_indicator_count": 0,
+            "high_risk_count": 0,
+            "malicious_indicator_count": 0,
+            "suspicious_indicator_count": 0,
+            "negative_reputation_count": 0,
+            "highest_malicious_detections": 0,
+            "highest_suspicious_detections": 0,
+            "lowest_reputation": None,
+            "dominant_high_risk_type": "Unknown",
         }
-        for indicator in sorted(enriched_indicators, key=sort_key)[:10]
+
+    high_risk_items = [
+        indicator
+        for indicator in enriched_indicators
+        if str(indicator.get("severity") or "Unknown") == "High"
     ]
+    high_risk_type_counts = _count_ioc_field(high_risk_items, "entity_type")
+    reputations = [
+        reputation
+        for reputation in (
+            _coerce_ioc_number(indicator.get("reputation"))
+            for indicator in enriched_indicators
+        )
+        if reputation is not None
+    ]
+    return {
+        "enriched_indicator_count": len(enriched_indicators),
+        "high_risk_count": len(high_risk_items),
+        "malicious_indicator_count": sum(
+            1 for indicator in enriched_indicators if _safe_int(indicator.get("malicious")) > 0
+        ),
+        "suspicious_indicator_count": sum(
+            1 for indicator in enriched_indicators if _safe_int(indicator.get("suspicious")) > 0
+        ),
+        "negative_reputation_count": sum(
+            1
+            for reputation in (
+                _coerce_ioc_number(indicator.get("reputation"))
+                for indicator in enriched_indicators
+            )
+            if reputation is not None and reputation < 0
+        ),
+        "highest_malicious_detections": max(
+            (_safe_int(indicator.get("malicious")) for indicator in enriched_indicators),
+            default=0,
+        ),
+        "highest_suspicious_detections": max(
+            (_safe_int(indicator.get("suspicious")) for indicator in enriched_indicators),
+            default=0,
+        ),
+        "lowest_reputation": min(reputations) if reputations else None,
+        "dominant_high_risk_type": _main_ioc_bucket(high_risk_type_counts),
+    }
+
+
+def _build_ioc_risk_metrics(
+    enriched_indicators: list[dict[str, Any]],
+) -> dict[str, Any]:
+    total = len(enriched_indicators)
+    scores = [
+        score
+        for score in (
+            _coerce_ioc_number(indicator.get("gti_score"))
+            for indicator in enriched_indicators
+        )
+        if score is not None
+    ]
+    high_count = sum(
+        1
+        for indicator in enriched_indicators
+        if str(indicator.get("severity") or "Unknown") == "High"
+    )
+    medium_count = sum(
+        1
+        for indicator in enriched_indicators
+        if str(indicator.get("severity") or "Unknown") == "Medium"
+    )
+    return {
+        "enriched_indicator_count": total,
+        "high_risk_percentage": _percentage(high_count, total),
+        "medium_or_high_risk_percentage": _percentage(high_count + medium_count, total),
+        "average_gti_score": (
+            round(sum(float(score) for score in scores) / len(scores), 1)
+            if scores
+            else None
+        ),
+        "max_gti_score": max(scores) if scores else None,
+        "indicators_with_vendor_detections": sum(
+            1
+            for indicator in enriched_indicators
+            if _safe_int(indicator.get("malicious")) > 0
+            or _safe_int(indicator.get("suspicious")) > 0
+        ),
+    }
 
 
 def _build_distribution_rows(
@@ -5128,7 +5359,7 @@ def _build_ioc_business_insights(
     type_distribution = _build_ioc_type_distribution_rows(enriched_indicators)
     risk_distribution = _build_risk_distribution_rows(enriched_indicators)
     action_distribution = _build_recommended_action_distribution_rows(enriched_indicators)
-    dangerous_rows = _build_top_dangerous_ioc_rows(enriched_indicators)
+    dangerous_summary = _build_dangerous_ioc_summary(enriched_indicators)
     insights: list[str] = []
 
     highest_score_row = next(
@@ -5177,11 +5408,11 @@ def _build_ioc_business_insights(
             "All successfully enriched indicators have enough context for an initial risk bucket."
         )
 
-    top_dangerous = dangerous_rows[0] if dangerous_rows else None
-    if top_dangerous and top_dangerous["malicious"] > 0:
+    if dangerous_summary["malicious_indicator_count"] > 0:
         insights.append(
-            f"The most dangerous enriched indicator is {top_dangerous.get('display_value') or top_dangerous['indicator']} "
-            f"with {top_dangerous['malicious']} malicious detection(s)."
+            f"{dangerous_summary['malicious_indicator_count']} enriched indicator(s) "
+            f"have malicious vendor detections; the highest single detection count is "
+            f"{dangerous_summary['highest_malicious_detections']}."
         )
     else:
         insights.append(
@@ -5199,237 +5430,6 @@ def _build_ioc_business_insights(
         )
 
     return insights[:5]
-
-
-def get_top_industries(
-    api_key: str,
-    year: int = 2024,
-    top_n: int = 10,
-    target: str | None = None,
-    max_collections: int | None = None,
-) -> dict[str, Any]:
-    """Aggregate top targeted industries for a year via GTI Intelligence Search."""
-
-    normalized_api_key = api_key.strip()
-    if not normalized_api_key:
-        raise ValueError("A GTI/VirusTotal API key is required for industry ranking.")
-
-    normalized_target = target.strip() if target else None
-    date_filter = f"creation_date:{year}-01-01+ creation_date:{year}-12-31-"
-    query = (
-        f"entity:collection {normalized_target} {date_filter}"
-        if normalized_target
-        else f"entity:collection {date_filter}"
-    )
-
-    industry_counter: dict[str, int] = {}
-    industry_display_names: dict[str, str] = {}
-    seen_collection_ids: set[str] = set()
-    collections_with_industries = 0
-    collections_without_industries = 0
-    pages_fetched = 0
-    cursor: str | None = None
-
-    while True:
-        if max_collections is not None and len(seen_collection_ids) >= max_collections:
-            break
-
-        search_result = intelligence_search(
-            api_key=normalized_api_key,
-            query=query,
-            limit=MAX_INTELLIGENCE_SEARCH_LIMIT,
-            cursor=cursor,
-        )
-        if _safe_int(search_result.get("status_code")) not in (0, 200):
-            break
-        pages_fetched += 1
-
-        items = search_result.get("simplified_preview", [])
-        for item in items:
-            if max_collections is not None and len(seen_collection_ids) >= max_collections:
-                break
-
-            coll_id = _stringify_value(item.get("id")) or ""
-            if not coll_id or coll_id in seen_collection_ids:
-                continue
-            seen_collection_ids.add(coll_id)
-            industries = _extract_names_from_field(item.get("targeted_industries"))
-            _count_distinct_collection_mentions(
-                industry_counter,
-                industry_display_names,
-                industries,
-            )
-            if industries:
-                collections_with_industries += 1
-            else:
-                collections_without_industries += 1
-
-        cursor = search_result.get("next_cursor")
-        if not cursor or not items:
-            break
-
-    return {
-        "year": year,
-        "source": "search",
-        "collections_seen": len(seen_collection_ids),
-        "collections_with_targeted_industries": collections_with_industries,
-        "collections_without_targeted_industries": collections_without_industries,
-        "unique_industries_count": len(industry_counter),
-        "pages_fetched": pages_fetched,
-        "data": _build_ranked_collection_results(
-            industry_counter, industry_display_names, top_n
-        ),
-    }
-
-
-def get_top_companies(
-    api_key: str,
-    year: int = 2024,
-    top_n: int = 10,
-    target: str | None = None,
-    max_pages: int = 3,
-) -> dict[str, Any]:
-    """Aggregate top targeted companies using DTM → Search → Actors fallback chain."""
-
-    normalized_api_key = api_key.strip()
-    if not normalized_api_key:
-        raise ValueError("A GTI/VirusTotal API key is required for company ranking.")
-
-    normalized_target = target.strip() if target else None
-
-    # Attempt 1: DTM events
-    try:
-        dtm_companies = _fetch_companies_from_dtm(normalized_api_key, normalized_target)
-        if dtm_companies is not None:
-            print(f"[companies] Source: DTM ({len(dtm_companies)} entries before slice)")
-            return {"year": year, "source": "dtm", "data": dtm_companies[:top_n]}
-    except Exception as exc:
-        print(f"[companies] DTM attempt skipped: {exc}")
-
-    # Attempt 2: Intelligence Search
-    try:
-        search_companies = _fetch_companies_from_search(
-            normalized_api_key, year, normalized_target, top_n, max_pages
-        )
-        if search_companies is not None:
-            print(f"[companies] Source: Search ({len(search_companies)} entries)")
-            return {"year": year, "source": "search", "data": search_companies}
-    except Exception as exc:
-        print(f"[companies] Search attempt skipped: {exc}")
-
-    # Attempt 3: Actors fallback — reuse aggregate_top_targets and extract companies
-    print("[companies] Source: Actors fallback")
-    fallback = aggregate_top_targets(
-        api_key=normalized_api_key,
-        start_year=year,
-        top_n=top_n,
-        max_collections=max_pages * MAX_INTELLIGENCE_SEARCH_LIMIT,
-    )
-    return {
-        "year": year,
-        "source": "actors",
-        "data": fallback.get("top_companies", []),
-    }
-
-
-def _fetch_companies_from_dtm(
-    api_key: str,
-    target: str | None,
-) -> list[dict[str, Any]] | None:
-    """Query DTM events endpoint for company names. Returns None on 403/404 or empty result."""
-
-    params: dict[str, Any] = {"limit": 40}
-    if target:
-        params["query"] = target
-
-    result = _probe_json_endpoint(
-        api_key=api_key,
-        url=VIRUSTOTAL_DTM_EVENTS_URL,
-        params=params,
-        endpoint_name="dtm_events",
-    )
-
-    status = int(result["http_status"])
-    if status in (403, 404):
-        print(f"[companies] DTM events HTTP {status} — plan insufficient, skipping.")
-        return None
-    if status != 200:
-        return None
-
-    items = _extract_api_items(result["raw_json"])
-    company_counter: dict[str, int] = {}
-    company_display: dict[str, str] = {}
-
-    for item in items:
-        raw_attributes = item.get("attributes")
-        attributes = raw_attributes if isinstance(raw_attributes, dict) else {}
-        for key in ("entity", "organization", "victim", "target_org", "company", "target"):
-            value = attributes.get(key) or item.get(key)
-            if value:
-                _count_distinct_collection_mentions(
-                    company_counter,
-                    company_display,
-                    _extract_names_from_field(value),
-                )
-
-    if not company_counter:
-        return None
-
-    return _build_ranked_collection_results(company_counter, company_display, 50)
-
-
-def _fetch_companies_from_search(
-    api_key: str,
-    year: int,
-    target: str | None,
-    top_n: int,
-    max_pages: int,
-) -> list[dict[str, Any]] | None:
-    """Extract organizations from GTI Intelligence Search preview fields. Returns None if empty."""
-
-    date_filter = f"creation_date:{year}-01-01+ creation_date:{year}-12-31-"
-    query = (
-        f"entity:collection {target} {date_filter}"
-        if target
-        else f"entity:collection {date_filter}"
-    )
-
-    company_counter: dict[str, int] = {}
-    company_display: dict[str, str] = {}
-    seen_ids: set[str] = set()
-    cursor: str | None = None
-
-    for _ in range(max_pages):
-        search_result = intelligence_search(
-            api_key=api_key,
-            query=query,
-            limit=MAX_INTELLIGENCE_SEARCH_LIMIT,
-            cursor=cursor,
-        )
-        if _safe_int(search_result.get("status_code")) not in (0, 200):
-            return None
-
-        items = search_result.get("simplified_preview", [])
-        for item in items:
-            coll_id = _stringify_value(item.get("id")) or ""
-            if not coll_id or coll_id in seen_ids:
-                continue
-            seen_ids.add(coll_id)
-            for key in ("targeted_organizations", "victims", "organizations"):
-                _count_distinct_collection_mentions(
-                    company_counter,
-                    company_display,
-                    _extract_names_from_field(item.get(key)),
-                )
-
-        cursor = search_result.get("next_cursor")
-        if not cursor or not items:
-            break
-
-    if not company_counter:
-        return None
-
-    return _build_ranked_collection_results(company_counter, company_display, top_n)
 
 
 class MockGTIClient:

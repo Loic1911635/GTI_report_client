@@ -15,16 +15,6 @@ const copyJsonButton = document.getElementById("copy-json-button");
 const messageBanner = document.getElementById("message-banner");
 const statusPill = document.getElementById("status-pill");
 const reportTypeField = document.getElementById("report_type");
-const intelligenceSearchFields = document.getElementById("intelligence-search-fields");
-const intelligenceQueryField = document.getElementById("intelligence_query");
-const intelligenceLimitField = document.getElementById("intelligence_limit");
-const intelligenceDescriptorsOnlyField = document.getElementById("intelligence_descriptors_only");
-const intelligencePresetButtons = document.querySelectorAll("[data-intelligence-query]");
-const companyDtmFields = document.getElementById("company-dtm-fields");
-const companyNameField = document.getElementById("company_name");
-const primaryDomainField = document.getElementById("primary_domain");
-const keywordsField = document.getElementById("keywords");
-const monitorIdField = document.getElementById("monitor_id");
 const targetField = document.getElementById("target");
 const targetLabel = document.getElementById("target-label");
 const downloadButton = document.getElementById("download-button");
@@ -32,13 +22,6 @@ const scopeFields = document.getElementById("report-scope-fields");
 const reportSectionsGroup = document.getElementById("report-sections-group");
 const outputFormatGroup = document.getElementById("output-format-group");
 const reportActions = document.getElementById("report-actions");
-const explorerActions = document.getElementById("explorer-actions");
-const explorerButton = document.getElementById("explorer-button");
-const companyDtmActions = document.getElementById("company-dtm-actions");
-const dtmMonitorsButton = document.getElementById("dtm-monitors-button");
-const dtmAlertsButton = document.getElementById("dtm-alerts-button");
-const intelligenceSearchActions = document.getElementById("intelligence-search-actions");
-const intelligenceSearchButton = document.getElementById("intelligence-search-button");
 const topTargetsFields = document.getElementById("top-targets-fields");
 const topTargetsActions = document.getElementById("top-targets-actions");
 const topTargetsButton = document.getElementById("top-targets-button");
@@ -84,11 +67,6 @@ const topTargetsEstimatePanel = document.getElementById("top-targets-estimate");
 const topTargetsIncludeDebugDocxField = document.getElementById("top_targets_include_debug_docx");
 const topTargetsDocxTemplateField = document.getElementById("top_targets_docx_template");
 const topTargetsDocxButton = document.getElementById("top-targets-docx-button");
-const statsYearField = document.getElementById("stats_year");
-const statsTargetField = document.getElementById("stats_target");
-const industriesChartEl = document.getElementById("industries-chart");
-const companiesChartEl = document.getElementById("companies-chart");
-const companiesSourceBadgeEl = document.getElementById("companies-source-badge");
 const modeCard = document.getElementById("mode-card");
 const modeCardLabel = document.getElementById("mode-card-label");
 const modeCardText = document.getElementById("mode-card-text");
@@ -96,11 +74,8 @@ const emptyStateTitle = document.getElementById("empty-state-title");
 const emptyStateText = document.getElementById("empty-state-text");
 
 const IOC_ENRICHMENT = "IoC Enrichment";
-const INDUSTRY_SNAPSHOT_EXPLORER = "Industry Snapshot Explorer";
-const COMPANY_EXPOSURE_DTM = "Company Exposure / DTM";
 const DTM_DASHBOARD = "DTM Monitor & Alert Dashboard";
 const IOC_STREAM_REPORT = "Recent IoC Stream Sample Report";
-const GTI_INTELLIGENCE_SEARCH = "GTI Intelligence Search";
 const TOP_TARGETS_RANKING = "Top Targets Ranking";
 const TOP_TARGETS_SEARCH_PAGE_SIZE = 40;
 const TOP_TARGETS_DEFAULT_MAX_COLLECTIONS = 1000;
@@ -150,18 +125,6 @@ const MODE_META = {
         emptyTitle: "Ready to generate a report",
         emptyText: "Enter a target domain, select the sections to include, and click Generate Report.",
     },
-    [INDUSTRY_SNAPSHOT_EXPLORER]: {
-        label: "Industry Snapshot Explorer",
-        description: "Scans GTI collections for Industry Snapshot reports and returns their metadata: publication dates, targeted sectors, regions, and summaries.",
-        emptyTitle: "Ready to explore",
-        emptyText: "Click Explore Industry Snapshots to browse GTI collections matching the snapshot filter.",
-    },
-    [COMPANY_EXPOSURE_DTM]: {
-        label: "Company Exposure / DTM",
-        description: "Queries your Digital Threat Monitoring watchlists and their recent alerts. Use this to verify API connectivity and review active monitors before generating a report.",
-        emptyTitle: "Ready to test DTM",
-        emptyText: "Fill in your company details, then click Test DTM Monitors or Test DTM Alerts.",
-    },
     [DTM_DASHBOARD]: {
         label: "DTM Monitor & Alert Dashboard",
         description: "Builds a read-only dashboard from existing DTM monitors and alerts. Enter your GTI API key or configure GTI_API_KEY in the backend.",
@@ -174,12 +137,6 @@ const MODE_META = {
         emptyTitle: "Ready to build a Recent IoC Stream Sample report",
         emptyText: "Choose how many recent pages to fetch, then click Generate Recent IoC Stream Sample Report.",
     },
-    [GTI_INTELLIGENCE_SEARCH]: {
-        label: "GTI Intelligence Search",
-        description: "Free-text search across GTI objects — collections, files, and threat actors. Use preset queries or write your own to explore available intelligence.",
-        emptyTitle: "Ready to search",
-        emptyText: "Enter a search query or choose a preset, then click Search GTI.",
-    },
     [TOP_TARGETS_RANKING]: {
         label: "Top Targets Ranking",
         description: "Scans GTI collections from a selected period and ranks the most frequently targeted industries and companies. Each entity is counted at most once per collection.",
@@ -191,13 +148,9 @@ const MODE_META = {
 let lastGeneratedReport = "";
 let lastDownloadFilename = "";
 let lastDownloadFormat = "markdown";
-let lastIntelligenceSearchResponse = null;
-let lastCollectionAnalysisResponse = null;
 let lastTopTargetsResponse = null;
 let lastDtmDashboardResponse = null;
 let lastIocStreamResponse = null;
-let activeCollectionAnalysisId = "";
-let collectionAnalysisInProgressId = "";
 let dtmMonitorSortKey = "risk_score";
 let dtmMonitorSortDirection = "desc";
 
@@ -324,46 +277,6 @@ function updateStatus(label, stateClass) {
 function setLoadingState(isLoading) {
     generateButton.disabled = isLoading;
     generateButton.textContent = isLoading ? "Generating..." : "Generate Report";
-    updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
-}
-
-function getExplorerButtonLabel() {
-    if (reportTypeField.value === INDUSTRY_SNAPSHOT_EXPLORER) {
-        return "Explore Industry Snapshots";
-    }
-
-    return "Run Explorer";
-}
-
-function setExplorerLoadingState(isLoading) {
-    explorerButton.disabled = isLoading;
-    explorerButton.textContent = isLoading
-        ? "Loading..."
-        : getExplorerButtonLabel();
-    updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
-}
-
-function setCompanyDtmLoadingState(isLoading, action) {
-    dtmMonitorsButton.disabled = isLoading;
-    dtmAlertsButton.disabled = isLoading;
-
-    if (!isLoading) {
-        dtmMonitorsButton.textContent = "Test DTM Monitors";
-        dtmAlertsButton.textContent = "Test DTM Alerts";
-    } else if (action === "monitors") {
-        dtmMonitorsButton.textContent = "Testing Monitors...";
-        dtmAlertsButton.textContent = "Test DTM Alerts";
-    } else {
-        dtmMonitorsButton.textContent = "Test DTM Monitors";
-        dtmAlertsButton.textContent = "Testing Alerts...";
-    }
-
-    updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
-}
-
-function setIntelligenceSearchLoadingState(isLoading) {
-    intelligenceSearchButton.disabled = isLoading;
-    intelligenceSearchButton.textContent = isLoading ? "Searching..." : "Search GTI";
     updateStatus(isLoading ? "Running" : "Idle", isLoading ? "running" : "idle");
 }
 
@@ -586,16 +499,11 @@ function updateEmptyState(type) {
 }
 
 function syncTargetRequirement() {
-    const isExplorerMode = (
-        reportTypeField.value === INDUSTRY_SNAPSHOT_EXPLORER
-    );
-    const isCompanyExposureDtm = reportTypeField.value === COMPANY_EXPOSURE_DTM;
     const isIocEnrichment = reportTypeField.value === IOC_ENRICHMENT;
-    const isIntelligenceSearch = reportTypeField.value === GTI_INTELLIGENCE_SEARCH;
     const isTopTargets = reportTypeField.value === TOP_TARGETS_RANKING;
     const isDtmDashboard = reportTypeField.value === DTM_DASHBOARD;
     const isIocStream = reportTypeField.value === IOC_STREAM_REPORT;
-    const isSpecialMode = isExplorerMode || isCompanyExposureDtm || isIntelligenceSearch || isTopTargets || isDtmDashboard || isIocStream;
+    const isSpecialMode = isTopTargets || isDtmDashboard || isIocStream;
 
     if (apiKeyBlock) {
         apiKeyBlock.hidden = false;
@@ -606,11 +514,6 @@ function syncTargetRequirement() {
     reportSectionsGroup.hidden = isSpecialMode;
     outputFormatGroup.hidden = isSpecialMode;
     reportActions.hidden = isSpecialMode;
-    explorerActions.hidden = !isExplorerMode;
-    intelligenceSearchFields.hidden = !isIntelligenceSearch;
-    intelligenceSearchActions.hidden = !isIntelligenceSearch;
-    companyDtmFields.hidden = !isCompanyExposureDtm;
-    companyDtmActions.hidden = !isCompanyExposureDtm;
     topTargetsFields.hidden = !isTopTargets;
     topTargetsActions.hidden = !isTopTargets;
     dtmDashboardFields.hidden = !isDtmDashboard;
@@ -620,17 +523,12 @@ function syncTargetRequirement() {
 
     targetField.required = (
         isIocEnrichment
-        && !isExplorerMode
-        && !isCompanyExposureDtm
-        && !isIntelligenceSearch
         && !isTopTargets
         && !isDtmDashboard
         && !isIocStream
     );
-    intelligenceQueryField.required = isIntelligenceSearch;
     targetField.placeholder = isIocEnrichment ? "example.com" : "Company, region, or industry";
     targetLabel.textContent = isIocEnrichment ? "Target Domain" : "Target (Optional)";
-    explorerButton.textContent = getExplorerButtonLabel();
 
     if (isSpecialMode) {
         lastGeneratedReport = "";
@@ -972,15 +870,6 @@ function renderEndpointResults(endpointResults) {
     `;
 }
 
-function renderCompanyDtmContext() {
-    return `
-        <p><strong>Company Name:</strong> ${formatApiValue(companyNameField.value.trim())}</p>
-        <p><strong>Primary Domain:</strong> ${formatApiValue(primaryDomainField.value.trim())}</p>
-        <p><strong>Keywords:</strong> ${formatApiValue(keywordsField.value.trim())}</p>
-        <p><strong>Monitor ID:</strong> ${formatApiValue(monitorIdField.value.trim())}</p>
-    `;
-}
-
 function renderPreviewField(label, value) {
     return `
         <div class="preview-row">
@@ -990,628 +879,10 @@ function renderPreviewField(label, value) {
     `;
 }
 
-function getCollectionDisplayLabel(item) {
-    if (item.title && item.name && item.title !== item.name) {
-        return `${String(item.title)} | ${String(item.name)}`;
-    }
-
-    return item.title || item.name;
-}
-
-function renderCollectionAnalyzeAction(item) {
-    const normalizedType = String(item.type || "").toLowerCase();
-    const collectionId = item.id ? String(item.id) : "";
-
-    if (normalizedType !== "collection" || !collectionId) {
-        return "";
-    }
-
-    const isAnalyzing = collectionAnalysisInProgressId === collectionId;
-    const buttonStateClass = activeCollectionAnalysisId === collectionId
-        ? "selected-action-button"
-        : "";
-
-    return `
-        <div class="preview-card-actions">
-            <button
-                type="button"
-                class="generate-button secondary-button inline-action-button ${buttonStateClass}"
-                data-analyze-collection-id="${escapeHtml(collectionId)}"
-                ${isAnalyzing ? "disabled" : ""}
-            >
-                ${isAnalyzing ? "Analyzing selected collection..." : "Analyze selected collection"}
-            </button>
-        </div>
-    `;
-}
-
-function renderIntelligenceSearchCard(item) {
-    const normalizedType = String(item.type || "").toLowerCase();
-
-    if (normalizedType === "file") {
-        return `
-            <article class="preview-card">
-                ${renderPreviewField("ID", item.id)}
-                ${renderPreviewField("Type", item.type)}
-                ${renderPreviewField("Meaningful Name", item.meaningful_name)}
-                ${renderPreviewField("Reputation", item.reputation)}
-                ${renderPreviewField("Last Analysis Stats", item.last_analysis_stats)}
-            </article>
-        `;
-    }
-
-    if (normalizedType !== "collection") {
-        return `
-            <article class="preview-card">
-                ${renderPreviewField("ID", item.id)}
-                ${renderPreviewField("Type", item.type)}
-                ${renderPreviewField("Title", item.title)}
-                ${renderPreviewField("Name", item.name)}
-                ${renderPreviewField("Meaningful Name", item.meaningful_name)}
-                ${renderPreviewField("Attributes Keys", item.attributes_keys)}
-            </article>
-        `;
-    }
-
-    return `
-        <article class="preview-card">
-            ${renderPreviewField("ID", item.id)}
-            ${renderPreviewField("Type", item.type)}
-            ${renderPreviewField("Title / Name", getCollectionDisplayLabel(item))}
-            ${renderPreviewField("Collection Type", item.collection_type)}
-            ${renderPreviewField("Creation Date", item.creation_date)}
-            ${renderPreviewField("Targeted Industries", item.targeted_industries)}
-            ${renderPreviewField("Targeted Regions", item.targeted_regions)}
-            ${renderPreviewField("Source Regions", item.source_regions)}
-            ${renderPreviewField("Tags", item.tags)}
-            ${renderPreviewField("Attributes Keys", item.attributes_keys)}
-            ${renderCollectionAnalyzeAction(item)}
-        </article>
-    `;
-}
-
-function renderCollectionAnalysisPanel(responseData) {
-    const analysis = responseData && typeof responseData.analysis === "object"
-        ? responseData.analysis
-        : {};
-
-    return `
-        <section class="analysis-panel">
-            <h2>Industry Profile Analyzer</h2>
-            <p><strong>Selected Collection ID:</strong> ${formatApiValue(responseData.collection_id)}</p>
-            <p><strong>Status Code:</strong> ${escapeHtml(String(responseData.status_code))}</p>
-            <div class="score-callout">
-                <p><strong>GTI Exposure Score:</strong> ${escapeHtml(String(responseData.experimental_exposure_score ?? 0))}</p>
-                <p>Experimental score based on GTI object counters, not a confirmed attack count.</p>
-            </div>
-            <div class="analysis-grid">
-                ${renderPreviewField("Name", analysis.name)}
-                ${renderPreviewField("Collection Type", analysis.collection_type)}
-                ${renderPreviewField("OSINT Summary", analysis.osint_summary)}
-                ${renderPreviewField("Recent Activity Summary", analysis.recent_activity_summary)}
-                ${renderPreviewField("Counters", analysis.counters)}
-                ${renderPreviewField("Aggregations", analysis.aggregations)}
-                ${renderPreviewField("Profile Stats", analysis.profile_stats)}
-                ${renderPreviewField("Targeted Industries", analysis.targeted_industries)}
-                ${renderPreviewField("Targeted Regions", analysis.targeted_regions)}
-                ${renderPreviewField("Source Region", analysis.source_region)}
-                ${renderPreviewField("Source Regions Hierarchy", analysis.source_regions_hierarchy)}
-                ${renderPreviewField("Malware Roles", analysis.malware_roles)}
-                ${renderPreviewField("Motivations", analysis.motivations)}
-                ${renderPreviewField("Merged Actors", analysis.merged_actors)}
-                ${renderPreviewField("Threat Activity Drivers", analysis.threat_activity_drivers)}
-                ${renderPreviewField("Collection Links", analysis.collection_links)}
-            </div>
-            ${renderRawJsonDetails(responseData.raw_data)}
-        </section>
-    `;
-}
-
-function renderIntelligenceSearchResult(
-    responseData,
-    collectionAnalysisResponse = lastCollectionAnalysisResponse,
-) {
-    const previewItems = Array.isArray(responseData.simplified_preview)
-        ? responseData.simplified_preview
-        : [];
-    const previewCardsHtml = previewItems.length > 0
-        ? `
-            <div class="preview-grid">
-                ${previewItems.map((item) => renderIntelligenceSearchCard(item)).join("")}
-            </div>
-        `
-        : "<p>No GTI objects were returned for the current page.</p>";
-    const analysisHtml = collectionAnalysisResponse
-        ? renderCollectionAnalysisPanel(collectionAnalysisResponse)
-        : "";
-
-    reportOutput.classList.remove("empty-state");
-    reportOutput.innerHTML = `
-        <h1>GTI Intelligence Search</h1>
-        <p><strong>Search Query:</strong> ${formatApiValue(intelligenceQueryField.value.trim())}</p>
-        <p><strong>Requested Limit:</strong> ${formatApiValue(Number(intelligenceLimitField.value || 10))}</p>
-        <p><strong>Descriptors Only:</strong> ${formatApiValue(intelligenceDescriptorsOnlyField.checked)}</p>
-        <p><strong>Status Code:</strong> ${escapeHtml(String(responseData.status_code))}</p>
-        <p><strong>Total Collected:</strong> ${escapeHtml(String(responseData.total_collected || 0))}</p>
-        <p><strong>Next Cursor:</strong> ${formatApiValue(responseData.next_cursor)}</p>
-        <h2>Simplified Preview</h2>
-        ${previewCardsHtml}
-        ${analysisHtml}
-        ${renderRawJsonDetails(responseData.raw_data)}
-    `;
-}
-
-function renderIndustrySnapshotResult(responseData) {
-    const snapshots = Array.isArray(responseData.snapshots) ? responseData.snapshots : [];
-    const snapshotItemsHtml = snapshots.length > 0
-        ? `<ul>${snapshots.map((item) => {
-            const titleAndName = item.title && item.name && item.title !== item.name
-                ? `${escapeHtml(String(item.title))} | ${escapeHtml(String(item.name))}`
-                : formatApiValue(item.title || item.name);
-
-            return `<li>
-                <strong>Title/Name:</strong> ${titleAndName}<br>
-                <strong>Published Date:</strong> ${formatApiValue(item.published_date)}<br>
-                <strong>Targeted Industries:</strong> ${formatApiValue(item.targeted_industries)}<br>
-                <strong>Targeted Regions:</strong> ${formatApiValue(item.targeted_regions)}<br>
-                <strong>Source Regions:</strong> ${formatApiValue(item.source_regions)}<br>
-                <strong>Summary/Description:</strong> ${formatApiValue(item.summary_or_description)}<br>
-                ${renderRawJsonDetails(item.raw_json)}
-            </li>`;
-        }).join("")}</ul>`
-        : "<p>No object with a title/name containing <code>Industry Snapshot</code> was returned.</p>";
-
-    reportOutput.classList.remove("empty-state");
-    reportOutput.innerHTML = `
-        <h1>Industry Snapshot Explorer</h1>
-        <p><strong>HTTP Status:</strong> ${escapeHtml(String(responseData.http_status))}</p>
-        <p><strong>Endpoint Checks:</strong></p>
-        ${renderEndpointResults(responseData.endpoint_results)}
-        <p><strong>Summary:</strong> ${escapeHtml(String(responseData.snapshot_count || 0))} matching object(s) found.</p>
-        <h2>Returned Industry Snapshot Objects</h2>
-        ${snapshotItemsHtml}
-    `;
-}
-
-function renderCompanyDtmMonitorsResult(responseData) {
-    const monitors = Array.isArray(responseData.monitors) ? responseData.monitors : [];
-    const domainFilter = responseData.domain_filter || "";
-    const paginationNote = responseData.truncated
-        ? " Retrieval stopped at the safe page limit."
-        : "";
-    const monitorItemsHtml = monitors.length > 0
-        ? `<ul>${monitors.map((item) => `
-            <li>
-                <strong>Monitor ID:</strong> ${formatApiValue(item.monitor_id)}<br>
-                <strong>Monitor Name:</strong> ${formatApiValue(item.monitor_name)}<br>
-                <strong>Monitor Type:</strong> ${formatApiValue(item.monitor_type)}<br>
-                <strong>Monitor Template:</strong> ${formatApiValue(item.monitor_template)}<br>
-                <strong>Created Date:</strong> ${formatApiValue(item.created_date)}<br>
-                ${renderRawJsonDetails(item.raw_json)}
-            </li>
-        `).join("")}</ul>`
-        : "<p>No monitor item could be extracted from the current response schema.</p>";
-
-    reportOutput.classList.remove("empty-state");
-    reportOutput.innerHTML = `
-        <h1>Company Exposure / DTM</h1>
-        ${renderCompanyDtmContext()}
-        <p><strong>HTTP Status:</strong> ${escapeHtml(String(responseData.http_status))}</p>
-        <p><strong>Primary Domain Filter:</strong> ${domainFilter ? `<code>${escapeHtml(String(domainFilter))}</code>` : "<em>none</em>"}</p>
-        <p><strong>Requested Page Size:</strong> ${escapeHtml(String(responseData.requested_size || 0))}</p>
-        <p><strong>Pagination:</strong> ${escapeHtml(String(responseData.page_count || 0))} page(s) loaded.${escapeHtml(paginationNote)}</p>
-        <p><strong>Endpoint Checks:</strong></p>
-        ${renderEndpointResults(responseData.endpoint_results)}
-        <p><strong>Summary:</strong> ${escapeHtml(String(responseData.monitor_count || 0))} monitor(s) matched out of ${escapeHtml(String(responseData.total_collected || responseData.total_monitor_count || 0))} collected from the API.</p>
-        <h2>DTM Monitors Preview</h2>
-        ${monitorItemsHtml}
-    `;
-}
-
-function renderCompanyDtmAlertsResult(responseData) {
-    const alerts = Array.isArray(responseData.simplified_preview)
-        ? responseData.simplified_preview
-        : (Array.isArray(responseData.alerts) ? responseData.alerts : []);
-    const paginationNote = responseData.truncated
-        ? " Retrieval stopped at the safe page limit."
-        : "";
-    const alertItemsHtml = alerts.length > 0
-        ? `<ul>${alerts.map((item) => `
-            <li>
-                <strong>Alert ID:</strong> ${formatApiValue(item.id || item.alert_id)}<br>
-                <strong>Type:</strong> ${formatApiValue(item.type)}<br>
-                <strong>Title/Name:</strong> ${formatApiValue(item.title_or_name)}<br>
-                <strong>Severity:</strong> ${formatApiValue(item.severity)}<br>
-                <strong>Status:</strong> ${formatApiValue(item.status)}<br>
-                <strong>Monitor ID:</strong> ${formatApiValue(item.monitor_id)}<br>
-                <strong>Created At:</strong> ${formatApiValue(item.created_at)}<br>
-                <strong>Updated At:</strong> ${formatApiValue(item.updated_at)}<br>
-                <strong>Alert Type/Category:</strong> ${formatApiValue(item.alert_type_or_category)}<br>
-                <strong>Matched Domain/URL/Email/Keyword:</strong> ${formatApiValue(item.matched_indicator)}<br>
-                <strong>Raw Attributes Keys:</strong> ${formatApiValue(item.raw_attribute_keys)}<br>
-                ${renderRawJsonDetails(item.raw_json)}
-            </li>
-        `).join("")}</ul>`
-        : "<p>No alert item could be extracted from the current response schema.</p>";
-
-    reportOutput.classList.remove("empty-state");
-    reportOutput.innerHTML = `
-        <h1>Company Exposure / DTM</h1>
-        ${renderCompanyDtmContext()}
-        <p><strong>HTTP Status:</strong> ${escapeHtml(String(responseData.http_status))}</p>
-        <p><strong>Requested Page Size:</strong> ${escapeHtml(String(responseData.requested_size || 0))}</p>
-        <p><strong>Monitor ID Filter:</strong> ${responseData.monitor_id ? `<code>${escapeHtml(String(responseData.monitor_id))}</code>` : "<em>none</em>"}</p>
-        <p><strong>Pagination:</strong> ${escapeHtml(String(responseData.page_count || 0))} page(s) loaded.${escapeHtml(paginationNote)}</p>
-        <p><strong>Endpoint Checks:</strong></p>
-        ${renderEndpointResults(responseData.endpoint_results)}
-        <p><strong>Summary:</strong> ${escapeHtml(String(responseData.alert_count || 0))} alert(s) normalized out of ${escapeHtml(String(responseData.total_collected || responseData.total_alert_count || 0))} collected from the API.</p>
-        <h2>DTM Alerts Preview</h2>
-        ${alertItemsHtml}
-    `;
-}
-
-async function runSelectedExplorer() {
-    if (!reportForm.reportValidity()) {
-        return;
-    }
-
-    clearMessage();
-    setExplorerLoadingState(true);
-    setDownloadState(false);
-    lastGeneratedReport = "";
-
-    try {
-        if (reportTypeField.value !== INDUSTRY_SNAPSHOT_EXPLORER) {
-            throw new Error("No explorer workflow is selected.");
-        }
-
-        const response = await fetch("/explore/industry-snapshots", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                api_key: apiKeyField.value.trim(),
-            }),
-        });
-
-        const responseData = await response.json();
-
-        if (!response.ok) {
-            const errorMessage = responseData.detail || "The backend returned an error.";
-            throw new Error(errorMessage);
-        }
-
-        renderIndustrySnapshotResult(responseData);
-        switchToTab("report");
-        rawJsonOutput.textContent = JSON.stringify(responseData.raw_json, null, 2);
-
-        if (responseData.http_status === 200) {
-            updateStatus("HTTP 200", "success");
-            showMessage(
-                `Industry Snapshot exploration completed. ${responseData.snapshot_count} matching object(s) found.`,
-                "success",
-            );
-        } else {
-            updateStatus(`HTTP ${responseData.http_status}`, "error");
-            showMessage(
-                `The endpoint responded with HTTP ${responseData.http_status}. Review the raw JSON below.`,
-                "error",
-            );
-        }
-    } catch (error) {
-        reportOutput.classList.add("empty-state");
-        reportOutput.innerHTML = `
-            <h3>Explorer request failed</h3>
-            <p>${escapeHtml(error.message || "Unknown error.")}</p>
-        `;
-        rawJsonOutput.textContent = "No valid JSON payload was returned.";
-        updateStatus("Error", "error");
-        showMessage(error.message || "Explorer request failed.", "error");
-    } finally {
-        setExplorerLoadingState(false);
-
-        if (!statusPill.classList.contains("success") && !statusPill.classList.contains("error")) {
-            updateStatus("Idle", "idle");
-        }
-    }
-}
-
-function buildIntelligenceSearchPayload() {
-    return {
-        api_key: apiKeyField.value.trim(),
-        query: intelligenceQueryField.value.trim(),
-        limit: Number(intelligenceLimitField.value || 10),
-        descriptors_only: intelligenceDescriptorsOnlyField.checked,
-    };
-}
-
-function applyIntelligenceQueryPreset(event) {
-    const presetQuery = event.currentTarget.dataset.intelligenceQuery || "";
-    intelligenceQueryField.value = presetQuery;
-    intelligenceQueryField.focus();
-    intelligenceQueryField.setSelectionRange(
-        intelligenceQueryField.value.length,
-        intelligenceQueryField.value.length,
-    );
-}
-
-function refreshIntelligenceSearchView() {
-    if (!lastIntelligenceSearchResponse) {
-        return;
-    }
-
-    renderIntelligenceSearchResult(
-        lastIntelligenceSearchResponse,
-        lastCollectionAnalysisResponse,
-    );
-}
-
-async function analyzeSelectedCollection(collectionId) {
-    if (!collectionId) {
-        return;
-    }
-
-    clearMessage();
-    collectionAnalysisInProgressId = collectionId;
-    refreshIntelligenceSearchView();
-    updateStatus("Running", "running");
-
-    try {
-        const response = await fetch("/explore/collection-details", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                api_key: apiKeyField.value.trim(),
-                collection_id: collectionId,
-            }),
-        });
-
-        const responseData = await response.json();
-        if (!response.ok) {
-            const errorMessage = responseData.detail || "The backend returned an error.";
-            throw new Error(errorMessage);
-        }
-
-        lastCollectionAnalysisResponse = responseData;
-        activeCollectionAnalysisId = collectionId;
-        refreshIntelligenceSearchView();
-        rawJsonOutput.textContent = JSON.stringify(responseData.raw_data, null, 2);
-
-        if (responseData.status_code === 200) {
-            updateStatus("HTTP 200", "success");
-            showMessage(
-                `Collection analysis completed for ${collectionId}. Experimental exposure score: ${responseData.experimental_exposure_score}.`,
-                "success",
-            );
-        } else {
-            updateStatus(`HTTP ${responseData.status_code}`, "error");
-            showMessage(
-                `The collection details endpoint responded with HTTP ${responseData.status_code}. Review the raw JSON below.`,
-                "error",
-            );
-        }
-    } catch (error) {
-        updateStatus("Error", "error");
-        showMessage(error.message || "Collection analysis failed.", "error");
-    } finally {
-        collectionAnalysisInProgressId = "";
-        refreshIntelligenceSearchView();
-
-        if (!statusPill.classList.contains("success") && !statusPill.classList.contains("error")) {
-            updateStatus("Idle", "idle");
-        }
-    }
-}
-
-async function searchGtiIntelligence() {
-    if (!reportForm.reportValidity()) {
-        return;
-    }
-
-    clearMessage();
-    setIntelligenceSearchLoadingState(true);
-    setDownloadState(false);
-    lastGeneratedReport = "";
-
-    try {
-        const response = await fetch("/explore/intelligence-search", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(buildIntelligenceSearchPayload()),
-        });
-
-        const responseData = await response.json();
-        if (!response.ok) {
-            const errorMessage = responseData.detail || "The backend returned an error.";
-            throw new Error(errorMessage);
-        }
-
-        lastIntelligenceSearchResponse = responseData;
-        lastCollectionAnalysisResponse = null;
-        activeCollectionAnalysisId = "";
-        collectionAnalysisInProgressId = "";
-        renderIntelligenceSearchResult(responseData);
-        switchToTab("report");
-        rawJsonOutput.textContent = JSON.stringify(responseData.raw_data, null, 2);
-
-        if (responseData.status_code === 200) {
-            updateStatus("HTTP 200", "success");
-            showMessage(
-                `GTI Intelligence Search completed. ${responseData.total_collected} object(s) returned in the current page.`,
-                "success",
-            );
-        } else {
-            updateStatus(`HTTP ${responseData.status_code}`, "error");
-            showMessage(
-                `The endpoint responded with HTTP ${responseData.status_code}. Review the raw JSON below.`,
-                "error",
-            );
-        }
-    } catch (error) {
-        reportOutput.classList.add("empty-state");
-        reportOutput.innerHTML = `
-            <h3>GTI Intelligence Search failed</h3>
-            <p>${escapeHtml(error.message || "Unknown error.")}</p>
-        `;
-        rawJsonOutput.textContent = "No valid JSON payload was returned.";
-        updateStatus("Error", "error");
-        lastIntelligenceSearchResponse = null;
-        lastCollectionAnalysisResponse = null;
-        activeCollectionAnalysisId = "";
-        collectionAnalysisInProgressId = "";
-        showMessage(error.message || "GTI Intelligence Search failed.", "error");
-    } finally {
-        setIntelligenceSearchLoadingState(false);
-
-        if (!statusPill.classList.contains("success") && !statusPill.classList.contains("error")) {
-            updateStatus("Idle", "idle");
-        }
-    }
-}
-
-function buildCompanyDtmPayload() {
-    return {
-        api_key: apiKeyField.value.trim(),
-        company_name: companyNameField.value.trim() || null,
-        primary_domain: primaryDomainField.value.trim() || null,
-        keywords: keywordsField.value.trim() || null,
-        monitor_id: monitorIdField.value.trim() || null,
-    };
-}
-
-async function testDtmMonitors() {
-    if (!reportForm.reportValidity()) {
-        return;
-    }
-
-    clearMessage();
-    setCompanyDtmLoadingState(true, "monitors");
-    setDownloadState(false);
-    lastGeneratedReport = "";
-
-    try {
-        const response = await fetch("/explore/dtm-monitors", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(buildCompanyDtmPayload()),
-        });
-
-        const responseData = await response.json();
-        if (!response.ok) {
-            const errorMessage = responseData.detail || "The backend returned an error.";
-            throw new Error(errorMessage);
-        }
-
-        renderCompanyDtmMonitorsResult(responseData);
-        switchToTab("report");
-        rawJsonOutput.textContent = JSON.stringify(
-            responseData.raw_data || responseData.raw_json,
-            null,
-            2,
-        );
-
-        if (responseData.http_status === 200) {
-            updateStatus("HTTP 200", "success");
-            showMessage(
-                `DTM monitors test completed. ${responseData.monitor_count} monitor(s) matched out of ${responseData.total_collected || responseData.total_monitor_count} collected across ${responseData.page_count} page(s).`,
-                "success",
-            );
-        } else {
-            updateStatus(`HTTP ${responseData.http_status}`, "error");
-            showMessage(
-                `The endpoint responded with HTTP ${responseData.http_status}. Review the raw JSON below.`,
-                "error",
-            );
-        }
-    } catch (error) {
-        reportOutput.classList.add("empty-state");
-        reportOutput.innerHTML = `
-            <h3>DTM monitors test failed</h3>
-            <p>${escapeHtml(error.message || "Unknown error.")}</p>
-        `;
-        rawJsonOutput.textContent = "No valid JSON payload was returned.";
-        updateStatus("Error", "error");
-        showMessage(error.message || "DTM monitors test failed.", "error");
-    } finally {
-        setCompanyDtmLoadingState(false, "monitors");
-
-        if (!statusPill.classList.contains("success") && !statusPill.classList.contains("error")) {
-            updateStatus("Idle", "idle");
-        }
-    }
-}
-
-async function testDtmAlerts() {
-    if (!reportForm.reportValidity()) {
-        return;
-    }
-
-    clearMessage();
-    setCompanyDtmLoadingState(true, "alerts");
-    setDownloadState(false);
-    lastGeneratedReport = "";
-
-    try {
-        const response = await fetch("/explore/dtm-alerts", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(buildCompanyDtmPayload()),
-        });
-
-        const responseData = await response.json();
-        if (!response.ok) {
-            const errorMessage = responseData.detail || "The backend returned an error.";
-            throw new Error(errorMessage);
-        }
-
-        renderCompanyDtmAlertsResult(responseData);
-        switchToTab("report");
-        rawJsonOutput.textContent = JSON.stringify(responseData.raw_json, null, 2);
-
-        if (responseData.http_status === 200) {
-            updateStatus("HTTP 200", "success");
-            showMessage(
-                `DTM alerts test completed. ${responseData.alert_count} alert(s) normalized out of ${responseData.total_collected || responseData.total_alert_count} collected across ${responseData.page_count} page(s).`,
-                "success",
-            );
-        } else {
-            updateStatus(`HTTP ${responseData.http_status}`, "error");
-            showMessage(
-                `The endpoint responded with HTTP ${responseData.http_status}. Review the raw JSON below.`,
-                "error",
-            );
-        }
-    } catch (error) {
-        reportOutput.classList.add("empty-state");
-        reportOutput.innerHTML = `
-            <h3>DTM alerts test failed</h3>
-            <p>${escapeHtml(error.message || "Unknown error.")}</p>
-        `;
-        rawJsonOutput.textContent = "No valid JSON payload was returned.";
-        updateStatus("Error", "error");
-        showMessage(error.message || "DTM alerts test failed.", "error");
-    } finally {
-        setCompanyDtmLoadingState(false, "alerts");
-
-        if (!statusPill.classList.contains("success") && !statusPill.classList.contains("error")) {
-            updateStatus("Idle", "idle");
-        }
-    }
-}
-
 function renderRankingTable(
     items,
     countLabel,
-    emptyMessage = "Field not present in GTI Intelligence Search preview for this sample",
+    emptyMessage = "Field not present in the GTI collection preview for this sample",
 ) {
     if (!Array.isArray(items) || items.length === 0) {
         return `<p><em>${escapeHtml(emptyMessage)}</em></p>`;
@@ -1706,7 +977,7 @@ function renderRankingSectionContent(rankingKey, items, countLabel, emptyMessage
         const msg = emptyMessage
             || (rankingKey === "targeted_organizations"
                 ? "Not enough organization data in preview fields."
-                : "Field not present in GTI Intelligence Search preview for this sample");
+                : "Field not present in the GTI collection preview for this sample");
         return `<p><em>${escapeHtml(msg)}</em></p>`;
     }
     const chartHtml = rankingKey !== "timeline" ? renderDonutChartSvg(items, 8) : "";
@@ -2084,24 +1355,6 @@ function renderTopTargetsResult(responseData) {
             <strong>Methodology:</strong> ${escapeHtml(String(responseData.methodology || ""))}
         </div>
     `;
-}
-
-function renderLiveRankingsFromTopTargets(responseData) {
-    const rankings = responseData.rankings || {};
-    const selectedRankings = Array.isArray(responseData.selected_rankings)
-        ? responseData.selected_rankings
-        : Object.keys(rankings);
-
-    industriesChartEl.innerHTML = selectedRankings.includes("targeted_industries")
-        ? renderRankingSectionContent("targeted_industries", rankings.targeted_industries || [], "collections")
-        : "<p><em>No industries ranking is available for this run.</em></p>";
-
-    companiesChartEl.innerHTML = !selectedRankings.includes("targeted_organizations")
-        ? "<p><em>No organizations ranking is available for this run.</em></p>"
-        : responseData.top_companies_status === "not enough data"
-            ? "<p><em>Not enough organization data in preview fields.</em></p>"
-            : renderRankingSectionContent("targeted_organizations", rankings.targeted_organizations || [], "collections");
-    companiesSourceBadgeEl.innerHTML = '<span class="badge source-badge">preview-only</span>';
 }
 
 function formatInteger(value) {
@@ -2755,21 +2008,6 @@ function RecentExposureCollectionSummary(responseData) {
     const insideWindowHint = collectionMode === "time_window" ? "GTI filter" : "kept";
     const serverDateDiagnosticsLine = collectionMode === "time_window" && collection.server_side_date_filter_attempted ? `<p class="compact-note">GTI filter sent: ${escapeHtml(String(gtiFilterSent))}. Raw IoCs returned: ${escapeHtml(String(returnedByDateFilter))}.</p>` : "";
     const streamTimestampFields = diagnostics.stream_timestamp_fields_seen || collection.stream_timestamp_fields_seen || [];
-    const rawTimestampDiagnostics = diagnostics.raw_item_timestamp_diagnostics || collection.raw_item_timestamp_diagnostics || [];
-    const timestampDiagnosticRows = Array.isArray(rawTimestampDiagnostics)
-        ? rawTimestampDiagnostics.flatMap((item) => {
-            const dateFields = Array.isArray(item.date_fields) ? item.date_fields : [];
-            return dateFields.map((field) => ({
-                id: item.id,
-                type: item.type,
-                path: field.path,
-                parsedDatetime: field.parsed_datetime,
-                classification: field.classification,
-                accepted: field.accepted_as_stream_timestamp,
-                rejectedObjectMetadata: field.rejected_as_object_metadata,
-            }));
-        })
-        : [];
     const cards = [
         ["Collection Mode", modeLabel, "mode"],
         ["Requested Pages", collection.requested_pages ?? responseData.technical_details?.request_params?.pages_to_fetch ?? "n/a", "input"],
@@ -2826,39 +2064,6 @@ function RecentExposureCollectionSummary(responseData) {
             <p class="compact-note">Items without matched on: ${escapeHtml(String(diagnostics.items_without_stream_timestamp_count ?? collection.items_without_stream_timestamp_count ?? 0))}.</p>
         </details>
     ` : "";
-    const timestampDiagnosticsTable = timestampDiagnosticRows.length ? `
-        <details class="diagnostics-block">
-            <summary>IoC Stream timestamp field diagnostics</summary>
-            <div class="table-scroll">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>IoC ID</th>
-                            <th>Type</th>
-                            <th>Field path</th>
-                            <th>Parsed datetime</th>
-                            <th>Classification</th>
-                            <th>Stream</th>
-                            <th>Object metadata</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${timestampDiagnosticRows.map((row) => `
-                            <tr>
-                                <td>${escapeHtml(String(row.id || "n/a"))}</td>
-                                <td>${escapeHtml(String(row.type || "n/a"))}</td>
-                                <td>${escapeHtml(String(row.path || "n/a"))}</td>
-                                <td>${escapeHtml(String(formatTimestampForReport(row.parsedDatetime)))}</td>
-                                <td>${escapeHtml(String(row.classification || "unknown"))}</td>
-                                <td>${escapeHtml(String(Boolean(row.accepted)))}</td>
-                                <td>${escapeHtml(String(Boolean(row.rejectedObjectMetadata)))}</td>
-                            </tr>
-                        `).join("")}
-                    </tbody>
-                </table>
-            </div>
-        </details>
-    ` : "";
     return `
         <section class="report-section-card">
             <h2>IoC Stream Collection</h2>
@@ -2890,7 +2095,6 @@ function RecentExposureCollectionSummary(responseData) {
             <p class="compact-note">${collectionMode === "time_window" ? "IoC Stream was fetched with the GTI matched-on date filter. Results are a GTI-filtered sample, not a complete coverage claim." : "Diagnostic mode only: this endpoint may not reflect the newest Matched on dates without a GTI date filter."}</p>
             ${warnings.length ? `<div class="diagnostic-warning compact">${warnings.map((warning) => `<p>${escapeHtml(String(warning))}</p>`).join("")}</div>` : ""}
             ${diagnosticsTable}
-            ${timestampDiagnosticsTable}
         </section>
     `;
 }
@@ -2912,8 +2116,24 @@ function IocStreamCharts(charts) {
                 ${renderIocStreamDonutChart(chartData.by_recommended_action, "Recommended actions")}
             </section>
             <section class="stats-chart-panel report-section-card">
-                <h2 class="stats-chart-title">Source Type Distribution</h2>
+                <h2 class="stats-chart-title">Intelligence Source Distribution</h2>
                 ${renderIocStreamBarChart(chartData.by_source_type)}
+            </section>
+            <section class="stats-chart-panel report-section-card">
+                <h2 class="stats-chart-title">Origin Distribution</h2>
+                ${renderIocStreamDonutChart(chartData.by_origin, "Origin distribution")}
+            </section>
+            <section class="stats-chart-panel report-section-card">
+                <h2 class="stats-chart-title">Trend Over Time</h2>
+                ${renderIocStreamBarChart(chartData.trend_over_time)}
+            </section>
+            <section class="stats-chart-panel report-section-card">
+                <h2 class="stats-chart-title">Most Active Threat Categories</h2>
+                ${renderIocStreamBarChart(chartData.by_threat_category)}
+            </section>
+            <section class="stats-chart-panel report-section-card">
+                <h2 class="stats-chart-title">Most Targeted Industries</h2>
+                ${renderIocStreamBarChart(chartData.by_targeted_industry)}
             </section>
         </div>
     `;
@@ -2948,63 +2168,6 @@ function IocStreamEnrichmentStatus(technicalDetails) {
     `;
 }
 
-function renderRiskBadge(risk) {
-    const normalizedRisk = String(risk || "Unknown");
-    return `<span class="risk-badge risk-${escapeHtml(normalizedRisk.toLowerCase())}">${escapeHtml(normalizedRisk)}</span>`;
-}
-
-function TopIndicatorsTable(indicators) {
-    const rows = Array.isArray(indicators) ? indicators.slice(0, 10) : [];
-    if (!rows.length) {
-        return `<p><em>No IoC Stream notifications were returned for the selected filters.</em></p>`;
-    }
-    return `
-        <div class="table-scroll">
-            <table class="ranking-table monitor-table">
-                <thead>
-                    <tr>
-                        <th>Indicator</th>
-                        <th>Type</th>
-                        <th>Risk</th>
-                        <th>Enrichment</th>
-                        <th>Source</th>
-                        <th>Recommended action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${rows.map((item) => `
-                        <tr class="ranking-row">
-                            <td class="name-cell"><strong>${escapeHtml(String(item.display_value || item.value || "Unknown"))}</strong></td>
-                            <td class="count-cell">${escapeHtml(String(item.entity_type || "Unknown"))}</td>
-                            <td class="count-cell">${renderRiskBadge(item.severity)}</td>
-                            <td class="count-cell">${renderIocEnrichmentCell(item)}</td>
-                            <td class="name-cell">
-                                ${escapeHtml(String(item.source_name || "Unknown"))}
-                                <small>${escapeHtml(String(item.source_type || "Unknown"))}</small>
-                            </td>
-                            <td class="count-cell">${escapeHtml(String(item.recommended_action || "Manual review"))}</td>
-                        </tr>
-                    `).join("")}
-                </tbody>
-            </table>
-        </div>
-    `;
-}
-
-function renderIocEnrichmentCell(item) {
-    const status = String(item.enrichment_status || "not_requested");
-    if (status !== "success") {
-        return `<span class="enrichment-status">${escapeHtml(status.replaceAll("_", " "))}</span>`;
-    }
-    const malicious = item.malicious ?? 0;
-    const suspicious = item.suspicious ?? 0;
-    const reputation = item.reputation ?? "n/a";
-    return `
-        <span class="enrichment-status success">M:${escapeHtml(String(malicious))} S:${escapeHtml(String(suspicious))}</span>
-        <small>rep ${escapeHtml(String(reputation))}</small>
-    `;
-}
-
 function formatAnalyticsPercent(value) {
     const number = Number(value || 0);
     return `${number.toFixed(number % 1 === 0 ? 0 : 1)}%`;
@@ -3015,20 +2178,17 @@ function IocStreamAnalystCards(analytics) {
     const actionRows = Array.isArray(analytics.recommended_action_distribution)
         ? analytics.recommended_action_distribution
         : [];
-    const dangerousRows = Array.isArray(analytics.top_dangerous_indicators)
-        ? analytics.top_dangerous_indicators
-        : [];
+    const dangerousSummary = analytics.dangerous_indicator_summary || {};
     const highRisk = riskRows.find((row) => row.label === "High")?.count || 0;
     const manualReview = actionRows.find((row) => row.label === "Manual Review")?.count || 0;
-    const topDangerous = dangerousRows[0];
     const cards = [
         ["Enriched IoCs", analytics.enriched_indicator_count || 0, "scored"],
         ["High Risk", highRisk, "enriched"],
         ["Manual Review", manualReview, "enriched"],
         [
-            "Top Malicious",
-            topDangerous ? topDangerous.malicious || 0 : 0,
-            topDangerous ? String(topDangerous.type || "indicator") : "detections",
+            "Malicious Detections",
+            dangerousSummary.malicious_indicator_count || 0,
+            "enriched IoCs",
         ],
     ];
     return `
@@ -3115,41 +2275,6 @@ function HighestRiskByTypeTable(rows) {
     `;
 }
 
-function DangerousIndicatorsTable(rows) {
-    const data = Array.isArray(rows) ? rows : [];
-    if (!data.length) {
-        return `<p><em>No successfully enriched IoCs are available for dangerous-indicator ranking.</em></p>`;
-    }
-    return `
-        <div class="table-scroll">
-            <table class="ranking-table monitor-table">
-                <thead>
-                    <tr>
-                        <th>Indicator</th>
-                        <th>Type</th>
-                        <th>Malicious</th>
-                        <th>Suspicious</th>
-                        <th>Reputation</th>
-                        <th>Recommended action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${data.map((row) => `
-                        <tr class="ranking-row">
-                            <td class="name-cell"><strong>${escapeHtml(String(row.display_value || row.indicator || "Unknown"))}</strong></td>
-                            <td class="count-cell">${escapeHtml(String(row.type || "Unknown"))}</td>
-                            <td class="count-cell">${escapeHtml(String(row.malicious ?? 0))}</td>
-                            <td class="count-cell">${escapeHtml(String(row.suspicious ?? 0))}</td>
-                            <td class="count-cell">${escapeHtml(row.reputation === null || row.reputation === undefined ? "n/a" : String(row.reputation))}</td>
-                            <td class="count-cell">${escapeHtml(String(row.recommended_action || "Manual review"))}</td>
-                        </tr>
-                    `).join("")}
-                </tbody>
-            </table>
-        </div>
-    `;
-}
-
 function DistributionTable(rows) {
     const data = Array.isArray(rows) ? rows : [];
     if (!data.length) {
@@ -3179,6 +2304,55 @@ function DistributionTable(rows) {
     `;
 }
 
+function KeyValueTable(rows) {
+    return `
+        <div class="table-scroll">
+            <table class="ranking-table compact-table">
+                <thead>
+                    <tr>
+                        <th>Metric</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rows.map(([label, value]) => `
+                        <tr class="ranking-row">
+                            <td class="name-cell">${escapeHtml(String(label))}</td>
+                            <td class="count-cell">${escapeHtml(value === null || value === undefined ? "n/a" : String(value))}</td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function DangerousIndicatorSummary(summary) {
+    const data = summary || {};
+    return KeyValueTable([
+        ["Enriched indicators analyzed", data.enriched_indicator_count ?? 0],
+        ["High-risk indicators", data.high_risk_count ?? 0],
+        ["Indicators with malicious detections", data.malicious_indicator_count ?? 0],
+        ["Indicators with suspicious detections", data.suspicious_indicator_count ?? 0],
+        ["Indicators with negative reputation", data.negative_reputation_count ?? 0],
+        ["Highest malicious detections on one indicator", data.highest_malicious_detections ?? 0],
+        ["Highest suspicious detections on one indicator", data.highest_suspicious_detections ?? 0],
+        ["Lowest reputation observed", data.lowest_reputation ?? "n/a"],
+        ["Dominant high-risk IoC type", data.dominant_high_risk_type || "Unknown"],
+    ]);
+}
+
+function RiskMetricsSummary(metrics) {
+    const data = metrics || {};
+    return KeyValueTable([
+        ["High-risk percentage", formatAnalyticsPercent(data.high_risk_percentage)],
+        ["Medium-or-high risk percentage", formatAnalyticsPercent(data.medium_or_high_risk_percentage)],
+        ["Average GTI score", data.average_gti_score ?? "n/a"],
+        ["Maximum GTI score", data.max_gti_score ?? "n/a"],
+        ["Indicators with vendor detections", data.indicators_with_vendor_detections ?? 0],
+    ]);
+}
+
 function IocStreamAnalystAnalysis(analytics) {
     const analystData = analytics || {};
     const insights = Array.isArray(analystData.business_insights)
@@ -3194,8 +2368,10 @@ function IocStreamAnalystAnalysis(analytics) {
             <ul>${insights.map((sentence) => `<li>${escapeHtml(String(sentence))}</li>`).join("")}</ul>
             <h3>Highest Risk by IoC Type</h3>
             ${HighestRiskByTypeTable(analystData.highest_risk_by_ioc_type)}
-            <h3>Top 10 Most Dangerous Indicators</h3>
-            ${DangerousIndicatorsTable(analystData.top_dangerous_indicators)}
+            <h3>Dangerous Indicator Aggregate Summary</h3>
+            ${DangerousIndicatorSummary(analystData.dangerous_indicator_summary)}
+            <h3>Risk Metrics</h3>
+            ${RiskMetricsSummary(analystData.risk_metrics)}
             <div class="stats-charts-grid ioc-chart-grid">
                 <section class="stats-chart-panel report-section-card">
                     <h3>Risk Distribution</h3>
@@ -3258,10 +2434,6 @@ function IocStreamReportPage(responseData) {
             <section class="report-section-card">
                 <h2>Business Interpretation</h2>
                 <ul>${businessSummary.map((sentence) => `<li>${escapeHtml(String(sentence))}</li>`).join("")}</ul>
-            </section>
-            <section class="report-section-card">
-                <h2>Top Indicators Requiring Attention</h2>
-                ${TopIndicatorsTable(responseData.top_indicators)}
             </section>
             ${DefinitionsPanel(responseData.definitions)}
             <details class="inline-raw-json">
@@ -3603,7 +2775,6 @@ async function runTopTargetsRanking() {
         lastTopTargetsResponse = normalizedResponseData;
 
         renderTopTargetsResult(normalizedResponseData);
-        renderLiveRankingsFromTopTargets(normalizedResponseData);
         renderCrossAnalysisTab(normalizedResponseData);
         renderDiagnosticsTab(normalizedResponseData, includeDebug);
         setTopTargetsDocxState(true);
@@ -3639,18 +2810,6 @@ async function runTopTargetsRanking() {
 async function generateReport(event) {
     event.preventDefault();
 
-    if (
-        reportTypeField.value === INDUSTRY_SNAPSHOT_EXPLORER
-    ) {
-        await runSelectedExplorer();
-        return;
-    }
-
-    if (reportTypeField.value === COMPANY_EXPOSURE_DTM) {
-        await testDtmMonitors();
-        return;
-    }
-
     if (reportTypeField.value === DTM_DASHBOARD) {
         await runDtmDashboard();
         return;
@@ -3658,11 +2817,6 @@ async function generateReport(event) {
 
     if (reportTypeField.value === IOC_STREAM_REPORT) {
         await runIocStreamReport();
-        return;
-    }
-
-    if (reportTypeField.value === GTI_INTELLIGENCE_SEARCH) {
-        await searchGtiIntelligence();
         return;
     }
 
@@ -3757,16 +2911,7 @@ function handleReportOutputClick(event) {
     if (tabSwitch) {
         event.preventDefault();
         switchToTab(tabSwitch.dataset.switchTab || "report");
-        return;
     }
-
-    const analyzeButton = event.target.closest("[data-analyze-collection-id]");
-    if (!analyzeButton) {
-        return;
-    }
-
-    event.preventDefault();
-    analyzeSelectedCollection(analyzeButton.dataset.analyzeCollectionId || "");
 }
 
 async function copyRawJsonToClipboard() {
@@ -3784,9 +2929,6 @@ async function copyRawJsonToClipboard() {
 
 reportTypeField.addEventListener("change", syncTargetRequirement);
 downloadButton.addEventListener("click", downloadCurrentReport);
-explorerButton.addEventListener("click", runSelectedExplorer);
-dtmMonitorsButton.addEventListener("click", testDtmMonitors);
-dtmAlertsButton.addEventListener("click", testDtmAlerts);
 dtmDashboardButton?.addEventListener("click", runDtmDashboard);
 iocStreamButton?.addEventListener("click", runIocStreamReport);
 iocStreamDocxButton?.addEventListener("click", exportIocStreamDocx);
@@ -3794,7 +2936,6 @@ dtmDashboardDocxButton?.addEventListener("click", exportDtmDashboardDocx);
 iocStreamCollectionModeField?.addEventListener("change", syncIocStreamCollectionControls);
 iocStreamPagesToFetchField?.addEventListener("change", syncIocStreamCollectionControls);
 iocStreamTimeWindowField?.addEventListener("change", syncIocStreamCollectionControls);
-intelligenceSearchButton.addEventListener("click", searchGtiIntelligence);
 topTargetsButton?.addEventListener("click", runTopTargetsRanking);
 topTargetsDocxButton?.addEventListener("click", exportTopRankingDocx);
 topTargetsDeepLookupField?.addEventListener("change", syncTopTargetsDeepLookupControls);
@@ -3813,9 +2954,6 @@ topTargetsDeepLookupField?.addEventListener("change", syncTopTargetsDeepLookupCo
 ].filter(Boolean).forEach((field) => {
     field.addEventListener("input", updateTopTargetsEstimatePanel);
     field.addEventListener("change", updateTopTargetsEstimatePanel);
-});
-intelligencePresetButtons.forEach((button) => {
-    button.addEventListener("click", applyIntelligenceQueryPreset);
 });
 reportOutput.addEventListener("click", handleReportOutputClick);
 dtmDashboardOutput?.addEventListener("click", (event) => {
@@ -3844,78 +2982,6 @@ updateTopTargetsEstimatePanel();
 syncIocStreamCollectionControls();
 syncTargetRequirement();
 reportForm.dataset.initialized = "true"; // enable field animations after initial render
-
-let statsDebounceTimer = null;
-
-async function fetchIndustries(year, target = "") {
-    const apiKey = apiKeyField.value.trim();
-    if (!apiKey) {
-        industriesChartEl.innerHTML = "<p><em>Enter your API key above to load data.</em></p>";
-        return;
-    }
-    industriesChartEl.innerHTML = "<p><em>Loading…</em></p>";
-
-    const params = new URLSearchParams({ year, top: 10 });
-    if (target) params.set("target", target);
-
-    try {
-        const response = await fetch(`/api/industries?${params}`, {
-            headers: { "x-api-key": apiKey },
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.detail || "Failed to load industries.");
-        industriesChartEl.innerHTML = renderRankingTable(data.data || [], "collections");
-    } catch (err) {
-        industriesChartEl.innerHTML = `<p class="stats-error">${escapeHtml(err.message)}</p>`;
-    }
-}
-
-async function fetchCompanies(year, target = "") {
-    const apiKey = apiKeyField.value.trim();
-    if (!apiKey) {
-        companiesChartEl.innerHTML = "<p><em>Enter your API key above to load data.</em></p>";
-        companiesSourceBadgeEl.innerHTML = "";
-        return;
-    }
-    companiesChartEl.innerHTML = "<p><em>Loading…</em></p>";
-    companiesSourceBadgeEl.innerHTML = "";
-
-    const params = new URLSearchParams({ year, top: 10 });
-    if (target) params.set("target", target);
-
-    try {
-        const response = await fetch(`/api/companies?${params}`, {
-            headers: { "x-api-key": apiKey },
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.detail || "Failed to load companies.");
-        companiesChartEl.innerHTML = renderRankingTable(data.data || [], "collections");
-        const sourceLabels = { dtm: "via DTM", search: "via Search", actors: "via Actors" };
-        const sourceLabel = sourceLabels[data.source] || data.source || "";
-        if (sourceLabel) {
-            companiesSourceBadgeEl.innerHTML = `<span class="badge source-badge">${escapeHtml(sourceLabel)}</span>`;
-        }
-    } catch (err) {
-        companiesChartEl.innerHTML = `<p class="stats-error">${escapeHtml(err.message)}</p>`;
-    }
-}
-
-function refreshStats() {
-    const year = Number(statsYearField?.value || 2024);
-    const target = statsTargetField?.value.trim() || "";
-    fetchIndustries(year, target);
-    fetchCompanies(year, target);
-}
-
-function onStatsInputChange() {
-    clearTimeout(statsDebounceTimer);
-    statsDebounceTimer = setTimeout(refreshStats, 400);
-}
-
-statsYearField?.addEventListener("change", onStatsInputChange);
-statsTargetField?.addEventListener("input", onStatsInputChange);
-apiKeyField?.addEventListener("change", refreshStats);
-refreshStats();
 
 // ── Tab switching ──────────────────────────────────────────────────────────
 

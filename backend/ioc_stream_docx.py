@@ -136,7 +136,11 @@ def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> s
 
     _insert_chart_multi("IoCs by entity type", charts.get("by_entity_type"), "bar")
     _insert_chart_multi("IoCs by risk", charts.get("by_risk"), "pie")
-    _insert_chart_multi("IoCs by source type", charts.get("by_source_type"), "bar")
+    _insert_chart_multi("Intelligence source distribution", charts.get("by_source_type"), "bar")
+    _insert_chart_multi("Origin distribution", charts.get("by_origin"), "pie")
+    _insert_chart_multi("Trend over time", charts.get("trend_over_time"), "bar")
+    _insert_chart_multi("Most active threat categories", charts.get("by_threat_category"), "bar")
+    _insert_chart_multi("Most targeted industries", charts.get("by_targeted_industry"), "bar")
     _insert_chart_multi("Recommended actions", charts.get("by_recommended_action"), "bar")
 
     # Enrichment Outcome pie/donut
@@ -170,11 +174,13 @@ def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> s
         document.add_paragraph(str(sentence), style="List Bullet")
     document.add_heading("Highest Risk by IoC Type", level=2)
     _add_ioc_type_risk_table(document, _as_list(analytics.get("highest_risk_by_ioc_type")))
-    document.add_heading("Top 10 Most Dangerous Indicators", level=2)
-    _add_dangerous_indicators_table(
+    document.add_heading("Dangerous Indicator Aggregate Summary", level=2)
+    _add_dangerous_summary_table(
         document,
-        _as_list(analytics.get("top_dangerous_indicators")),
+        _as_dict(analytics.get("dangerous_indicator_summary")),
     )
+    document.add_heading("Risk Metrics", level=2)
+    _add_risk_metrics_table(document, _as_dict(analytics.get("risk_metrics")))
     def _insert_dist_multi(title: str, rows: Any, primary: str) -> None:
         dist_rows = _as_list(rows)
         labels = [str(_as_dict(r).get("label") or "Unknown") for r in dist_rows]
@@ -281,9 +287,6 @@ def generate_ioc_stream_docx(report_data: dict[str, Any], output_path: str) -> s
             except Exception:
                 pass
 
-    document.add_heading("Top Indicators Requiring Attention", level=1)
-    _add_top_indicators_table(document, _as_list(report_data.get("top_indicators"))[:10])
-
     document.add_heading("Business Interpretation", level=1)
     for sentence in _as_list(report_data.get("business_summary")):
         document.add_paragraph(str(sentence), style="List Bullet")
@@ -325,38 +328,6 @@ def _add_label_value_table(document: Document, rows: list[Any]) -> None:
         cells[1].text = str(row_dict.get("value", 0))
 
 
-def _add_top_indicators_table(document: Document, indicators: list[Any]) -> None:
-    headers = (
-        "Indicator",
-        "Type",
-        "Risk",
-        "Malicious",
-        "Suspicious",
-        "Reputation",
-        "Source",
-        "Recommended action",
-    )
-    table = document.add_table(rows=1, cols=len(headers))
-    table.style = "Table Grid"
-    for index, header in enumerate(headers):
-        table.rows[0].cells[index].text = header
-    if not indicators:
-        cells = table.add_row().cells
-        cells[0].text = "No IoC Stream notifications were returned."
-        return
-    for indicator in indicators:
-        item = _as_dict(indicator)
-        cells = table.add_row().cells
-        cells[0].text = str(item.get("display_value") or item.get("value") or "Unknown")
-        cells[1].text = str(item.get("entity_type") or "Unknown")
-        cells[2].text = str(item.get("severity") or "Unknown")
-        cells[3].text = _format_optional(item.get("malicious"))
-        cells[4].text = _format_optional(item.get("suspicious"))
-        cells[5].text = _format_optional(item.get("reputation"))
-        cells[6].text = str(item.get("source_name") or item.get("source_type") or "Unknown")
-        cells[7].text = str(item.get("recommended_action") or "Manual review")
-
-
 def _add_ioc_type_risk_table(document: Document, rows: list[Any]) -> None:
     headers = (
         "IoC type",
@@ -384,31 +355,34 @@ def _add_ioc_type_risk_table(document: Document, rows: list[Any]) -> None:
         cells[5].text = f"{item.get('malicious_percentage', 0)}%"
 
 
-def _add_dangerous_indicators_table(document: Document, indicators: list[Any]) -> None:
-    headers = (
-        "Indicator",
-        "Type",
-        "Malicious",
-        "Suspicious",
-        "Reputation",
-        "Recommended action",
+def _add_dangerous_summary_table(document: Document, summary: dict[str, Any]) -> None:
+    _add_key_value_table(
+        document,
+        [
+            ("Enriched indicators analyzed", summary.get("enriched_indicator_count", 0)),
+            ("High-risk indicators", summary.get("high_risk_count", 0)),
+            ("Indicators with malicious detections", summary.get("malicious_indicator_count", 0)),
+            ("Indicators with suspicious detections", summary.get("suspicious_indicator_count", 0)),
+            ("Indicators with negative reputation", summary.get("negative_reputation_count", 0)),
+            ("Highest malicious detections on one indicator", summary.get("highest_malicious_detections", 0)),
+            ("Highest suspicious detections on one indicator", summary.get("highest_suspicious_detections", 0)),
+            ("Lowest reputation observed", summary.get("lowest_reputation", "n/a")),
+            ("Dominant high-risk IoC type", summary.get("dominant_high_risk_type", "Unknown")),
+        ],
     )
-    table = document.add_table(rows=1, cols=len(headers))
-    table.style = "Table Grid"
-    for index, header in enumerate(headers):
-        table.rows[0].cells[index].text = header
-    if not indicators:
-        table.add_row().cells[0].text = "No enriched IoCs available."
-        return
-    for indicator in indicators:
-        item = _as_dict(indicator)
-        cells = table.add_row().cells
-        cells[0].text = str(item.get("display_value") or item.get("indicator") or "Unknown")
-        cells[1].text = str(item.get("type") or "Unknown")
-        cells[2].text = str(item.get("malicious", 0))
-        cells[3].text = str(item.get("suspicious", 0))
-        cells[4].text = _format_optional(item.get("reputation"))
-        cells[5].text = str(item.get("recommended_action") or "Manual review")
+
+
+def _add_risk_metrics_table(document: Document, metrics: dict[str, Any]) -> None:
+    _add_key_value_table(
+        document,
+        [
+            ("High-risk percentage", f"{metrics.get('high_risk_percentage', 0)}%"),
+            ("Medium-or-high risk percentage", f"{metrics.get('medium_or_high_risk_percentage', 0)}%"),
+            ("Average GTI score", metrics.get("average_gti_score", "n/a")),
+            ("Maximum GTI score", metrics.get("max_gti_score", "n/a")),
+            ("Indicators with vendor detections", metrics.get("indicators_with_vendor_detections", 0)),
+        ],
+    )
 
 
 def _add_distribution_table(document: Document, rows: list[Any]) -> None:
