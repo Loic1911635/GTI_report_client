@@ -618,7 +618,7 @@ def _template_contains_legacy_text(template_path: Path) -> bool:
     try:
         document = Document(template_path)
     except Exception:
-        return True
+        return False
 
     legacy_markers = (
         "Ranking tables are inserted after template rendering",
@@ -694,7 +694,9 @@ def generate_top_ranking_docx(
 ) -> str:
     """Render a GTI Top Rankings DOCX report from an existing result object."""
 
-    resolved_template = ensure_default_top_ranking_template(template_path)
+    resolved_template = Path(template_path)
+    if not resolved_template.exists():
+        resolved_template = ensure_default_top_ranking_template(resolved_template)
     resolved_output = Path(output_path)
     resolved_output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1237,20 +1239,53 @@ def _write_chart_images(charts: Any) -> dict[str, Path]:
     return chart_paths
 
 
+def _safe_add_heading(document: Document, text: str, level: int) -> None:
+    """Add a heading paragraph, falling back to bold text if the style is absent."""
+    try:
+        document.add_heading(text, level=level)
+    except (KeyError, ValueError):
+        paragraph = document.add_paragraph(text)
+        for run in paragraph.runs:
+            run.bold = True
+
+
+def _apply_table_borders(table: Any) -> None:
+    """Apply basic grid borders via XML without relying on any named table style."""
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    tbl = table._tbl
+    tbl_pr = tbl.find(qn("w:tblPr"))
+    if tbl_pr is None:
+        tbl_pr = OxmlElement("w:tblPr")
+        tbl.insert(0, tbl_pr)
+    existing = tbl_pr.find(qn("w:tblBorders"))
+    if existing is not None:
+        tbl_pr.remove(existing)
+    borders = OxmlElement("w:tblBorders")
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = OxmlElement(f"w:{side}")
+        el.set(qn("w:val"), "single")
+        el.set(qn("w:sz"), "4")
+        el.set(qn("w:color"), "auto")
+        borders.append(el)
+    tbl_pr.append(borders)
+
+
 def _append_ranking_tables(document: Document, context: dict[str, Any]) -> None:
     """Append ranking tables and native charts to the rendered report document."""
 
     document.add_page_break()
-    document.add_heading("Rankings", level=1)
+    _safe_add_heading(document, "Rankings", level=1)
     for ranking_key, ranking_label in RANKING_LABELS.items():
         rows = context.get(ranking_key, [])
-        document.add_heading(ranking_label, level=2)
+        _safe_add_heading(document, ranking_label, level=2)
         if not rows:
             document.add_paragraph(context.get(f"{ranking_key}_note") or EMPTY_RANKING_NOTE)
             continue
 
         table = document.add_table(rows=1, cols=3)
-        table.style = "Table Grid"
+        _apply_table_borders(table)
         header_cells = table.rows[0].cells
         header_cells[0].text = "#"
         header_cells[1].text = "Name"
@@ -1321,7 +1356,7 @@ def _append_ranking_tables(document: Document, context: dict[str, Any]) -> None:
 def _append_cross_analysis(document: Document, context: dict[str, Any]) -> None:
     """Append cross-analysis matrices after basic rankings."""
 
-    document.add_heading("Cross-analysis", level=1)
+    _safe_add_heading(document, "Cross-analysis", level=1)
     document.add_paragraph(
         "These matrices count co-occurring GTI collection metadata values. Counts "
         "represent GTI collections, not confirmed incident counts."
@@ -1333,7 +1368,7 @@ def _append_cross_analysis(document: Document, context: dict[str, Any]) -> None:
 
     for matrix_key, matrix in matrices.items():
         label = CROSS_ANALYSIS_LABELS.get(matrix_key, matrix_key)
-        document.add_heading(label, level=2)
+        _safe_add_heading(document, label, level=2)
         eligible = _safe_int(matrix.get("eligible_collections") if isinstance(matrix, dict) else 0)
         document.add_paragraph(f"Eligible collections: {eligible}")
         document.add_paragraph(
@@ -1353,7 +1388,7 @@ def _append_cross_analysis(document: Document, context: dict[str, Any]) -> None:
             or [0]
         )
         table = document.add_table(rows=1, cols=len(columns) + 1)
-        table.style = "Table Grid"
+        _apply_table_borders(table)
         header_cells = table.rows[0].cells
         header_cells[0].text = ""
         for index, column in enumerate(columns, start=1):
@@ -1397,7 +1432,7 @@ def _shade_cell(cell: Any, fill: str) -> None:
 def _append_field_coverage(document: Document, context: dict[str, Any]) -> None:
     """Append field coverage diagnostics with a stacked bar chart."""
 
-    document.add_heading("Appendix: Field Coverage", level=1)
+    _safe_add_heading(document, "Appendix: Field Coverage", level=1)
     coverage = context.get("fields_coverage", {})
     total = _safe_int(context.get("collections_analyzed"))
     coverage_fields = (
@@ -1410,7 +1445,7 @@ def _append_field_coverage(document: Document, context: dict[str, Any]) -> None:
         "targeted_organizations",
     )
     table = document.add_table(rows=1, cols=3)
-    table.style = "Table Grid"
+    _apply_table_borders(table)
     header_cells = table.rows[0].cells
     header_cells[0].text = "Field"
     header_cells[1].text = "Collections with data"
@@ -1464,7 +1499,7 @@ def _append_ttp_diagnostics(document: Document, context: dict[str, Any]) -> None
     if not isinstance(first_debug, dict):
         first_debug = {}
 
-    document.add_heading("Appendix: TTP Diagnostics", level=1)
+    _safe_add_heading(document, "Appendix: TTP Diagnostics", level=1)
     if ttp.get("warning_message"):
         document.add_paragraph(str(ttp.get("warning_message")))
 
@@ -1486,7 +1521,7 @@ def _append_ttp_diagnostics(document: Document, context: dict[str, Any]) -> None
     )
 
     table = document.add_table(rows=1, cols=2)
-    table.style = "Table Grid"
+    _apply_table_borders(table)
     header_cells = table.rows[0].cells
     header_cells[0].text = "Diagnostic"
     header_cells[1].text = "Value"
@@ -1495,7 +1530,7 @@ def _append_ttp_diagnostics(document: Document, context: dict[str, Any]) -> None
         cells[0].text = str(key)
         cells[1].text = str(value)
 
-    document.add_heading("ttp_lookup_attempt_samples", level=2)
+    _safe_add_heading(document, "ttp_lookup_attempt_samples", level=2)
     samples = ttp.get("ttp_lookup_attempt_samples", [])
     if isinstance(samples, list) and samples:
         document.add_paragraph(json.dumps(samples, indent=2, default=str))
@@ -1513,8 +1548,8 @@ def _append_optional_debug(
     if not include_debug:
         return
 
-    document.add_heading("Technical Debug Appendix", level=1)
-    document.add_heading("Attribute Key Frequency", level=2)
+    _safe_add_heading(document, "Technical Debug Appendix", level=1)
+    _safe_add_heading(document, "Attribute Key Frequency", level=2)
     frequency = context.get("debug_attribute_keys_frequency", {})
     if isinstance(frequency, dict) and frequency:
         for key, count in sorted(frequency.items(), key=lambda item: (-_safe_int(item[1]), str(item[0]))):
@@ -1522,7 +1557,7 @@ def _append_optional_debug(
     else:
         document.add_paragraph("No attribute key diagnostics were available.")
 
-    document.add_heading("Sample Collection Fields", level=2)
+    _safe_add_heading(document, "Sample Collection Fields", level=2)
     samples = context.get("debug_sample_collection_fields", [])
     if isinstance(samples, list) and samples:
         for sample in samples:
